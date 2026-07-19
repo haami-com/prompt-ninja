@@ -1,0 +1,14 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
+.app-shell { min-height: 100vh; background: radial-gradient(circle at 80% 0%, #e9f1e8 0, #f7f8f5 34rem); }
+.upload-zone { border: 1px dashed rgba(78, 118, 94, .45); border-radius: 14px; background: rgba(255,255,255,.55); padding: 15px 16px; transition: all .2s ease; }
+.upload-zone:hover { border-color: #4e765e; background: #f3f7f2; }
+.agent-row { position: relative; padding: 8px 0 18px; }
+.agent-row:last-child { padding-bottom: 0; }
+.agent-line { width: 1px; height: 20px; position: absolute; left: 17px; top: 42px; background: #e4e9e4; }
+.agent-row.is-active svg { animation: spin 1.3s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+textarea, input { font-family: inherit !important; }
+

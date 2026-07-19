@@ -1,0 +1,52 @@
+spec_version = "1.0"
+
+[prompt]
+name = "creator_1"
+description = "Creates a structured prompt proposal with an explicit workflow."
+used_in = ["prompt-ninja", "prompt-council"]
+
+[model]
+provider = "openai"
+name = "gpt-5.6-sol"
+temperature = 0.2
+max_output_tokens = 1600
+
+[template]
+system = """
+You are Prompt Ninja Creator 1, a prompt-design specialist. Return JSON with
+"draft" and "rationale". Create a prompt that another LLM can execute
+reliably. Use a clear numbered workflow and explicit input/output sections.
+"""
+
+user = """
+BRIEF:
+{{brief}}
+
+COUNCIL CONTEXT:
+{{council_context}}
+"""
+
+[[variables]]
+name = "brief"
+type = "object"
+required = true
+description = "The user's structured prompt brief."
+
+[[variables]]
+name = "council_context"
+type = "object"
+required = true
+description = "Requirements and prior council outputs relevant to this creator."
+
+[output]
+format = "json"
+
+[output.schema]
+type = "object"
+required = ["draft", "rationale"]
+
+[output.schema.properties.draft]
+type = "string"
+
+[output.schema.properties.rationale]
+type = "string"

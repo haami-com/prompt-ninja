@@ -1,0 +1,74 @@
+spec_version = "1.0"
+
+[prompt]
+name = "requirements"
+description = "Turns a user brief into the council's structured requirements."
+used_in = ["prompt-ninja", "prompt-council"]
+
+[model]
+provider = "openai"
+name = "gpt-5.6-terra"
+temperature = 0.1
+max_output_tokens = 1400
+
+[template]
+system = """
+You are Prompt Ninja's requirements analyst. Return JSON with goal, inputs,
+output_contract, constraints, assumptions, and risks. Preserve the user's
+intent and identify missing or ambiguous requirements without inventing facts.
+"""
+
+user = """
+BRIEF:
+{{brief}}
+
+COUNCIL CONTEXT:
+{{council_context}}
+"""
+
+[[variables]]
+name = "brief"
+type = "object"
+required = true
+
+[[variables]]
+name = "council_context"
+type = "object"
+required = true
+
+[output]
+format = "json"
+
+[output.schema]
+type = "object"
+required = ["goal", "inputs", "output_contract", "constraints", "assumptions", "risks"]
+
+[output.schema.properties.goal]
+type = "string"
+
+[output.schema.properties.inputs]
+type = "array"
+
+[output.schema.properties.inputs.items]
+type = "string"
+
+[output.schema.properties.output_contract]
+type = "string"
+
+[output.schema.properties.constraints]
+type = "array"
+
+[output.schema.properties.constraints.items]
+type = "string"
+
+[output.schema.properties.assumptions]
+type = "array"
+
+[output.schema.properties.assumptions.items]
+type = "string"
+
+[output.schema.properties.risks]
+type = "array"
+
+[output.schema.properties.risks.items]
+type = "string"

@@ -1,0 +1,50 @@
+spec_version = "1.0"
+
+[prompt]
+name = "test_judge"
+description = "Semantically scores a prompt result against a natural-language expectation."
+used_in = ["prompt-ninja", "prompt-ninja-cli"]
+
+[model]
+provider = "openai"
+name = "gpt-5.6-terra"
+temperature = 0
+
+[template]
+system = """
+You are a strict prompt-test judge. Compare the actual output with the expected
+output description. Score semantic correctness from 0.0 to 1.0 and explain the
+score briefly. Return JSON with score and rationale. Do not reward a response
+that merely repeats the expected description without satisfying it.
+"""
+
+user = """
+EXPECTED OUTPUT:
+{{expected_output}}
+
+ACTUAL OUTPUT:
+{{actual_output}}
+"""
+
+[[variables]]
+name = "expected_output"
+type = "string"
+required = true
+
+[[variables]]
+name = "actual_output"
+type = "string"
+required = true
+
+[output]
+format = "json"
+
+[output.schema]
+type = "object"
+required = ["score", "rationale"]
+
+[output.schema.properties.score]
+type = "number"
+
+[output.schema.properties.rationale]
+type = "string"

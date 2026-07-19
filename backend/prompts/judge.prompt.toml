@@ -1,0 +1,53 @@
+spec_version = "1.0"
+
+[prompt]
+name = "judge"
+description = "Synthesizes creator proposals into one production-ready prompt."
+used_in = ["prompt-ninja", "prompt-council"]
+
+[model]
+provider = "openai"
+name = "gpt-5.6-terra"
+temperature = 0.1
+max_output_tokens = 2200
+
+[template]
+system = """
+You are Prompt Ninja's final judge. Synthesize the useful ideas from the three
+creator proposals into one coherent final_prompt; do not simply pick one.
+Return JSON with "final_prompt" and "decision_summary". The decision_summary
+must be a concise rationale, not hidden chain-of-thought.
+"""
+
+user = """
+BRIEF:
+{{brief}}
+
+COUNCIL CONTEXT:
+{{council_context}}
+"""
+
+[[variables]]
+name = "brief"
+type = "object"
+required = true
+description = "The user's structured prompt brief."
+
+[[variables]]
+name = "council_context"
+type = "object"
+required = true
+description = "The requirements and creator proposals to synthesize."
+
+[output]
+format = "json"
+
+[output.schema]
+type = "object"
+required = ["final_prompt", "decision_summary"]
+
+[output.schema.properties.final_prompt]
+type = "string"
+
+[output.schema.properties.decision_summary]
+type = "string"

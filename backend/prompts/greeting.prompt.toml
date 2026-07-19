@@ -1,0 +1,50 @@
+spec_version = "1.0"
+
+[prompt]
+name = "greeting"
+description = "Returns a concise greeting for a named person."
+used_in = ["prompt-council"]
+
+[model]
+provider = "openai"
+name = "gpt-5.6"
+temperature = 0
+max_output_tokens = 100
+
+[template]
+system = """
+You return a JSON object that follows the requested schema.
+"""
+
+user = """
+Greet {{name}} using the requested tone: {{tone}}.
+"""
+
+[[variables]]
+name = "name"
+type = "string"
+required = true
+description = "Person to greet."
+
+[[variables]]
+name = "tone"
+type = "string"
+required = false
+default = "friendly"
+
+[output]
+format = "json"
+
+[output.schema]
+type = "object"
+required = ["result"]
+
+[output.schema.properties.result]
+type = "string"
+
+[[tests]]
+name = "friendly greeting"
+expected_output = "A friendly greeting to Ada in a JSON object with a result string."
+
+[tests.input]
+name = "Ada"
