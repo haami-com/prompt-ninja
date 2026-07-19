@@ -18,7 +18,6 @@ from app.prompt_ninja import (
     SamplingRunHook,
 )
 
-
 PROMPT = """
 spec_version = "1.0"
 output = "app.prompt_ninja.JsonObjectOutput"
@@ -73,7 +72,9 @@ def test_load_render_and_run_embedded_tests(tmp_path):
     assert prepared.model == "gpt-5.6"
     assert prepared.user == "Hello Ada. Enabled: true."
 
-    report = prompt.run_tests(lambda _: '{"result": "Hello, Ada!", "meta": {"enabled": true}}')
+    report = prompt.run_tests(
+        lambda _: '{"result": "Hello, Ada!", "meta": {"enabled": true}}'
+    )
     assert report.passed
     assert report.results[0].actual.root == {
         "result": "Hello, Ada!",
@@ -109,7 +110,9 @@ def test_pydantic_output_and_expected_output_are_enforced(tmp_path):
     with pytest.raises(ValidationError, match="result"):
         PromptNinja(definition).validate_output("{}")
 
-    failing = prompt.run_tests(lambda _: {"result": "Different", "meta": {"enabled": True}})
+    failing = prompt.run_tests(
+        lambda _: {"result": "Different", "meta": {"enabled": True}}
+    )
     assert not failing.passed
     assert failing.results[0].error == "Output did not contain the expected values."
 
@@ -121,8 +124,12 @@ def test_undeclared_template_variable_is_rejected(tmp_path):
 
 
 def test_required_variable_missing_from_template_is_rejected(tmp_path):
-    content = PROMPT.replace("Hello {{name}}. Enabled: {{enabled}}.", "Enabled: {{enabled}}.")
-    with pytest.raises(PromptValidationError, match="required variables are not referenced"):
+    content = PROMPT.replace(
+        "Hello {{name}}. Enabled: {{enabled}}.", "Enabled: {{enabled}}."
+    )
+    with pytest.raises(
+        PromptValidationError, match="required variables are not referenced"
+    ):
         PromptNinja.from_file(write_prompt(tmp_path, content))
 
 
@@ -167,7 +174,9 @@ def test_validation_rejects_missing_or_non_pydantic_output_models(tmp_path):
         PromptNinja(definition)
 
     definition["output"] = "app.models.DEFAULT_MODEL"
-    with pytest.raises(PromptValidationError, match="must resolve to a Pydantic BaseModel"):
+    with pytest.raises(
+        PromptValidationError, match="must resolve to a Pydantic BaseModel"
+    ):
         PromptNinja(definition)
 
 
@@ -189,7 +198,10 @@ def test_included_prompt_file_has_a_passing_test():
     async def judge(test, actual):
         assert test.expected_output
         assert actual.result == "Hello, Ada!"
-        return {"score": 0.96, "rationale": "The response satisfies the greeting contract."}
+        return {
+            "score": 0.96,
+            "rationale": "The response satisfies the greeting contract.",
+        }
 
     report = asyncio.run(prompt.arun_tests(executor, judge=judge))
     assert report.passed
@@ -203,13 +215,19 @@ def test_validated_prompt_round_trips_through_toml_with_its_full_spec(tmp_path):
     exported_path.write_text(original.to_toml())
     restored = PromptNinja.from_file(exported_path)
 
-    assert restored.spec.model_dump(by_alias=True) == original.spec.model_dump(by_alias=True)
+    assert restored.spec.model_dump(by_alias=True) == original.spec.model_dump(
+        by_alias=True
+    )
 
 
 def test_toml_round_trip_preserves_every_variable_type_and_embedded_test(tmp_path):
     definition = {
         "spec_version": "1.0",
-        "prompt": {"name": "typed", "description": "Exercises every variable type.", "used_in": ["backend/tests/test_prompt_ninja.py"]},
+        "prompt": {
+            "name": "typed",
+            "description": "Exercises every variable type.",
+            "used_in": ["backend/tests/test_prompt_ninja.py"],
+        },
         "model": {"provider": "openai", "name": "gpt-5.6-sol"},
         "template": {
             "system": "Process typed input.",
@@ -225,25 +243,29 @@ def test_toml_round_trip_preserves_every_variable_type_and_embedded_test(tmp_pat
         ],
         "output": "app.prompt_ninja.JsonObjectOutput",
         "testing": {"pass_threshold": 0.9},
-        "tests": [{
-            "name": "typed fixture",
-            "input": {
-                "text": "hello",
-                "count": 2,
-                "ratio": 0.5,
-                "enabled": True,
-                "tags": ["one"],
-                "metadata": {"source": "test"},
-            },
-            "expected": {"items": ["hello"]},
-        }],
+        "tests": [
+            {
+                "name": "typed fixture",
+                "input": {
+                    "text": "hello",
+                    "count": 2,
+                    "ratio": 0.5,
+                    "enabled": True,
+                    "tags": ["one"],
+                    "metadata": {"source": "test"},
+                },
+                "expected": {"items": ["hello"]},
+            }
+        ],
     }
     original = PromptNinja(definition)
     path = tmp_path / "typed-round-trip.prompt.toml"
     path.write_text(original.to_toml())
     restored = PromptNinja.from_file(path)
 
-    assert restored.spec.model_dump(by_alias=True) == original.spec.model_dump(by_alias=True)
+    assert restored.spec.model_dump(by_alias=True) == original.spec.model_dump(
+        by_alias=True
+    )
 
 
 def test_natural_language_test_uses_configured_pass_threshold(tmp_path):
@@ -251,7 +273,10 @@ def test_natural_language_test_uses_configured_pass_threshold(tmp_path):
         "[[tests]]",
         "[testing]\npass_threshold = 0.97\n\n[[tests]]",
     )
-    content = content.replace('name = "Ada greeting"\n\n[tests.input]', 'name = "Ada greeting"\nexpected_output = "A correct greeting for Ada."\n\n[tests.input]')
+    content = content.replace(
+        'name = "Ada greeting"\n\n[tests.input]',
+        'name = "Ada greeting"\nexpected_output = "A correct greeting for Ada."\n\n[tests.input]',
+    )
     content = content.replace('\n[tests.expected]\nresult = "Hello, Ada!"', "")
     prompt = PromptNinja.from_file(write_prompt(tmp_path, content))
 
@@ -272,40 +297,67 @@ def test_async_execution_and_openai_adapter_use_the_prompt_contract(tmp_path):
     async def executor(_):
         return {"result": "Hello, Ada!", "meta": {"enabled": True}}
 
-    assert asyncio.run(prompt.arun({"name": "Ada"}, executor)).root["result"] == "Hello, Ada!"
+    assert (
+        asyncio.run(prompt.arun({"name": "Ada"}, executor)).root["result"]
+        == "Hello, Ada!"
+    )
 
     class FakeResponses:
         async def create(self, **request):
             self.request = request
-            return SimpleNamespace(output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}')
+            return SimpleNamespace(
+                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}'
+            )
 
     responses = FakeResponses()
     client = SimpleNamespace(responses=responses)
-    assert asyncio.run(prompt.run_openai({"name": "Ada"}, client=client)).root["meta"] == {"enabled": True}
+    assert asyncio.run(prompt.run_openai({"name": "Ada"}, client=client)).root[
+        "meta"
+    ] == {"enabled": True}
     assert responses.request["model"] == "gpt-5.6"
-    assert responses.request["instructions"] == "Return JSON only.\n\nReturn a valid JSON object."
-    assert responses.request["input"] == "Hello Ada. Enabled: true.\n\nReturn a valid JSON object."
+    assert (
+        responses.request["instructions"]
+        == "Return JSON only.\n\nReturn a valid JSON object."
+    )
+    assert (
+        responses.request["input"]
+        == "Hello Ada. Enabled: true.\n\nReturn a valid JSON object."
+    )
     assert "text" not in responses.request
     assert responses.request["store"] is False
 
 
-def test_json_output_adds_an_explicit_json_instruction_when_template_omits_one(tmp_path):
-    prompt = PromptNinja.from_file(write_prompt(
-        tmp_path,
-        PROMPT.replace('system = "Return JSON only."', 'system = "Follow the output schema."'),
-    ))
+def test_json_output_adds_an_explicit_json_instruction_when_template_omits_one(
+    tmp_path,
+):
+    prompt = PromptNinja.from_file(
+        write_prompt(
+            tmp_path,
+            PROMPT.replace(
+                'system = "Return JSON only."', 'system = "Follow the output schema."'
+            ),
+        )
+    )
 
     class FakeResponses:
         async def create(self, **request):
             self.request = request
-            return SimpleNamespace(output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}')
+            return SimpleNamespace(
+                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}'
+            )
 
     responses = FakeResponses()
     client = SimpleNamespace(responses=responses)
     asyncio.run(prompt.run_openai({"name": "Ada"}, client=client))
 
-    assert responses.request["instructions"] == "Follow the output schema.\n\nReturn a valid JSON object."
-    assert responses.request["input"] == "Hello Ada. Enabled: true.\n\nReturn a valid JSON object."
+    assert (
+        responses.request["instructions"]
+        == "Follow the output schema.\n\nReturn a valid JSON object."
+    )
+    assert (
+        responses.request["input"]
+        == "Hello Ada. Enabled: true.\n\nReturn a valid JSON object."
+    )
 
 
 def test_installed_openai_client_exposes_the_responses_api():
@@ -339,19 +391,23 @@ def test_runtime_overrides_and_sampling_hooks_capture_a_complete_run(tmp_path):
     class FakeResponses:
         async def create(self, **request):
             self.request = request
-            return SimpleNamespace(output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}')
+            return SimpleNamespace(
+                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}'
+            )
 
     responses = FakeResponses()
     client = SimpleNamespace(responses=responses)
     events = []
     hook = SamplingRunHook(events.append, sample_rate=1.0)
 
-    asyncio.run(prompt.run_openai(
-        {"name": "Ada"},
-        client=client,
-        runtime=PromptRuntimeOptions(model="gpt-5.6-sol"),
-        hooks=(hook,),
-    ))
+    asyncio.run(
+        prompt.run_openai(
+            {"name": "Ada"},
+            client=client,
+            runtime=PromptRuntimeOptions(model="gpt-5.6-sol"),
+            hooks=(hook,),
+        )
+    )
 
     assert responses.request["model"] == "gpt-5.6-sol"
     assert "temperature" not in responses.request
@@ -370,10 +426,14 @@ def test_openai_client_can_return_a_typed_output_model(tmp_path):
 
     class FakeResponses:
         async def create(self, **_):
-            return SimpleNamespace(output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}')
+            return SimpleNamespace(
+                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}'
+            )
 
     client = SimpleNamespace(responses=FakeResponses())
-    result = asyncio.run(prompt.run_openai({"name": "Ada"}, client=client, output_model=GreetingOutput))
+    result = asyncio.run(
+        prompt.run_openai({"name": "Ada"}, client=client, output_model=GreetingOutput)
+    )
     assert isinstance(result, GreetingOutput)
     assert result.meta == {"enabled": True}
 
@@ -388,24 +448,30 @@ def test_openai_client_prefers_responses_parse_for_a_typed_output_model(tmp_path
     class FakeResponses:
         async def parse(self, **request):
             self.request = request
-            return SimpleNamespace(output_parsed=GreetingOutput(
-                result="Hello, Ada!",
-                meta={"enabled": True},
-            ))
+            return SimpleNamespace(
+                output_parsed=GreetingOutput(
+                    result="Hello, Ada!",
+                    meta={"enabled": True},
+                )
+            )
 
         async def create(self, **_request):
-            raise AssertionError("create should not be used for typed structured output")
+            raise AssertionError(
+                "create should not be used for typed structured output"
+            )
 
     def redundant_validation(_):
         raise AssertionError("parsed Pydantic output should not be validated twice")
 
     prompt.validate_output = redundant_validation
     responses = FakeResponses()
-    result = asyncio.run(prompt.run_openai(
-        {"name": "Ada"},
-        client=SimpleNamespace(responses=responses),
-        output_model=GreetingOutput,
-    ))
+    result = asyncio.run(
+        prompt.run_openai(
+            {"name": "Ada"},
+            client=SimpleNamespace(responses=responses),
+            output_model=GreetingOutput,
+        )
+    )
 
     assert isinstance(result, GreetingOutput)
     assert result.result == "Hello, Ada!"
@@ -428,10 +494,12 @@ def test_bigint_output_uses_a_typed_root_model_with_responses_parse(tmp_path):
             return SimpleNamespace(output_parsed=BigIntOutput(42))
 
     responses = FakeResponses()
-    result = asyncio.run(prompt.run_openai(
-        {"name": "Ada"},
-        client=SimpleNamespace(responses=responses),
-    ))
+    result = asyncio.run(
+        prompt.run_openai(
+            {"name": "Ada"},
+            client=SimpleNamespace(responses=responses),
+        )
+    )
 
     assert result == 42
     assert responses.request["text_format"] is BigIntOutput

@@ -12,7 +12,13 @@ def test_generate_uses_goal_from_config_and_writes_valid_prompt(tmp_path, monkey
     async def fake_generate(_):
         return CouncilResult(
             final_prompt="Summarize the user's text in plain English.",
-            prompt_spec=PromptSpec(goal="summary", inputs=[], output_contract="text", constraints=[], assumptions=[]),
+            prompt_spec=PromptSpec(
+                goal="summary",
+                inputs=[],
+                output_contract="text",
+                constraints=[],
+                assumptions=[],
+            ),
             agents=[],
             judge_model="gpt-5.6-terra",
         )
@@ -23,11 +29,16 @@ def test_generate_uses_goal_from_config_and_writes_valid_prompt(tmp_path, monkey
     config.write_text('goal = "Summarize legal documents into plain English"\n')
     output = tmp_path / "prompts" / "legal-summary.prompt.toml"
 
-    result = runner.invoke(cli, ["generate", "--config", str(config), "--output", str(output)])
+    result = runner.invoke(
+        cli, ["generate", "--config", str(config), "--output", str(output)]
+    )
 
     assert result.exit_code == 0, result.output
     assert "Generated" in result.output
-    assert PromptNinja.from_file(output).name == "summarize-legal-documents-into-plain-english"
+    assert (
+        PromptNinja.from_file(output).name
+        == "summarize-legal-documents-into-plain-english"
+    )
 
 
 def test_generate_preserves_the_compiled_prompt_definition(tmp_path, monkeypatch):
@@ -42,17 +53,25 @@ def test_generate_preserves_the_compiled_prompt_definition(tmp_path, monkeypatch
         "template": {"system": "Summarize the update.", "user": "Update: {{update}}"},
         "variables": [{"name": "update", "type": "string", "required": True}],
         "output": "String",
-        "tests": [{
-            "name": "summary fixture",
-            "input": {"update": "Launch is on track."},
-            "expected_output": "A concise status summary.",
-        }],
+        "tests": [
+            {
+                "name": "summary fixture",
+                "input": {"update": "Launch is on track."},
+                "expected_output": "A concise status summary.",
+            }
+        ],
     }
 
     async def fake_generate(_):
         return CouncilResult(
             final_prompt="Summarize the update.",
-            prompt_spec=PromptSpec(goal="summary", inputs=[], output_contract="text", constraints=[], assumptions=[]),
+            prompt_spec=PromptSpec(
+                goal="summary",
+                inputs=[],
+                output_contract="text",
+                constraints=[],
+                assumptions=[],
+            ),
             prompt_definition=definition,
             agents=[],
             judge_model="gpt-5.6-terra",
@@ -60,13 +79,15 @@ def test_generate_preserves_the_compiled_prompt_definition(tmp_path, monkeypatch
 
     monkeypatch.setattr(cli_module, "_generate", fake_generate)
     output = tmp_path / "compiled.prompt.toml"
-    result = CliRunner().invoke(cli, ["generate", "--goal", "Summarize project updates", "--output", str(output)])
+    result = CliRunner().invoke(
+        cli,
+        ["generate", "--goal", "Summarize project updates", "--output", str(output)],
+    )
 
     assert result.exit_code == 0, result.output
-    assert (
-        PromptNinja.from_file(output).spec.model_dump(by_alias=True, exclude_none=True)
-        == PromptNinja(definition).spec.model_dump(by_alias=True, exclude_none=True)
-    )
+    assert PromptNinja.from_file(output).spec.model_dump(
+        by_alias=True, exclude_none=True
+    ) == PromptNinja(definition).spec.model_dump(by_alias=True, exclude_none=True)
 
 
 def test_cli_registers_requested_commands():
@@ -78,8 +99,7 @@ def test_cli_registers_requested_commands():
 
 def test_test_prompts_reports_prompt_without_embedded_cases(tmp_path):
     prompt = tmp_path / "empty.prompt.toml"
-    prompt.write_text(
-        """spec_version = \"1.0\"
+    prompt.write_text("""spec_version = \"1.0\"
 output = \"String\"
 [prompt]
 name = \"empty\"
@@ -90,8 +110,7 @@ provider = \"openai\"
 name = \"gpt-5.6\"
 [template]
 system = \"Do work.\"
-"""
-    )
+""")
 
     result = CliRunner().invoke(cli, ["test-prompts", "--prompts-dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -100,8 +119,7 @@ system = \"Do work.\"
 
 def test_validate_reports_valid_and_invalid_prompt_files(tmp_path):
     valid = tmp_path / "valid.prompt.toml"
-    valid.write_text(
-        """spec_version = \"1.0\"
+    valid.write_text("""spec_version = \"1.0\"
 output = \"String\"
 [prompt]
 name = \"valid\"
@@ -112,10 +130,13 @@ provider = \"openai\"
 name = \"gpt-5.6\"
 [template]
 system = \"Do work.\"
-"""
-    )
+""")
     invalid = tmp_path / "invalid.prompt.toml"
-    invalid.write_text(valid.read_text().replace('name = "gpt-5.6"', 'name = "gpt-5.6"\nunknown = true'))
+    invalid.write_text(
+        valid.read_text().replace(
+            'name = "gpt-5.6"', 'name = "gpt-5.6"\nunknown = true'
+        )
+    )
 
     result = CliRunner().invoke(cli, ["validate", str(tmp_path)])
     assert result.exit_code == 1
@@ -126,8 +147,7 @@ system = \"Do work.\"
 
 def test_validate_reports_a_missing_output_model(tmp_path):
     prompt_file = tmp_path / "missing-model.prompt.toml"
-    prompt_file.write_text(
-        """spec_version = "1.0"
+    prompt_file.write_text("""spec_version = "1.0"
 output = "app.models.OutputModelThatDoesNotExist"
 [prompt]
 name = "missing_model"
@@ -138,8 +158,7 @@ provider = "openai"
 name = "gpt-5.6"
 [template]
 system = "Do work."
-"""
-    )
+""")
 
     result = CliRunner().invoke(cli, ["validate", str(prompt_file)])
 
@@ -151,8 +170,7 @@ system = "Do work."
 
 def test_validate_fix_repairs_a_missing_output_model(tmp_path, monkeypatch):
     prompt_file = tmp_path / "missing-model.prompt.toml"
-    prompt_file.write_text(
-        """spec_version = "1.0"
+    prompt_file.write_text("""spec_version = "1.0"
 output = "app.models.OutputModelThatDoesNotExist"
 [prompt]
 name = "missing_model"
@@ -163,8 +181,7 @@ provider = "openai"
 name = "gpt-5.6"
 [template]
 system = "Return a short text response."
-"""
-    )
+""")
     repair_call = {}
 
     async def fake_repair(path, feedback, model):

@@ -2,7 +2,13 @@ import asyncio
 
 import pytest
 
-from app.agents import CREATOR_PROMPT_FILES, JUDGE_PROMPT_FILE, REQUIREMENTS_PROMPT_FILE, PromptCouncil, default_agent_instructions
+from app.agents import (
+    CREATOR_PROMPT_FILES,
+    JUDGE_PROMPT_FILE,
+    REQUIREMENTS_PROMPT_FILE,
+    PromptCouncil,
+    default_agent_instructions,
+)
 from app.main import app
 from app.models import Brief
 from app.prompt_ninja import PromptNinja
@@ -13,7 +19,9 @@ def test_council_prompt_files_render_with_the_runtime_context():
     brief = Brief(outcome="Create an accurate summary")
     for path in (*CREATOR_PROMPT_FILES, JUDGE_PROMPT_FILE):
         prompt = PromptNinja.from_file(path)
-        prepared = prompt.prepare({"brief": brief.model_dump(), "council_context": {"requirements": {}}})
+        prepared = prompt.prepare(
+            {"brief": brief.model_dump(), "council_context": {"requirements": {}}}
+        )
         assert prepared.system
         assert "Create an accurate summary" in prepared.user
 
@@ -21,8 +29,14 @@ def test_council_prompt_files_render_with_the_runtime_context():
 def test_requirements_prompt_requires_array_valued_output_fields():
     prompt = PromptNinja.from_file(REQUIREMENTS_PROMPT_FILE)
 
-    assert "inputs, constraints,\nassumptions, and risks fields must each be JSON arrays of strings" in prompt.spec.template.system
-    assert "Never return a single string or an object for those fields" in prompt.spec.template.system
+    assert (
+        "inputs, constraints,\nassumptions, and risks fields must each be JSON arrays of strings"
+        in prompt.spec.template.system
+    )
+    assert (
+        "Never return a single string or an object for those fields"
+        in prompt.spec.template.system
+    )
 
 
 def test_council_uses_toml_defaults_and_allows_an_override():
@@ -33,20 +47,29 @@ def test_council_uses_toml_defaults_and_allows_an_override():
     council = PromptCouncil()
     council.prompt_client = FakePromptClient()
     brief = Brief(outcome="Create an accurate summary")
-    _, default = asyncio.run(council.run_prompt(
-        council.creator_prompt_specs[0],
-        {"brief": brief.model_dump(), "council_context": {}},
-    ))
-    _, override = asyncio.run(council.run_prompt(
-        council.creator_prompt_specs[0],
-        {"brief": brief.model_dump(), "council_context": {}},
-        system_override="Custom creator instruction",
-    ))
+    _, default = asyncio.run(
+        council.run_prompt(
+            council.creator_prompt_specs[0],
+            {"brief": brief.model_dump(), "council_context": {}},
+        )
+    )
+    _, override = asyncio.run(
+        council.run_prompt(
+            council.creator_prompt_specs[0],
+            {"brief": brief.model_dump(), "council_context": {}},
+            system_override="Custom creator instruction",
+        )
+    )
 
     assert "Creator 1" in default.system
     assert override.system == "Custom creator instruction"
-    assert default_agent_instructions()["judge"] == council.judge_prompt_spec.spec.template.system
-    assert council.creator_models == [prompt.spec.model.name for prompt in council.creator_prompt_specs]
+    assert (
+        default_agent_instructions()["judge"]
+        == council.judge_prompt_spec.spec.template.system
+    )
+    assert council.creator_models == [
+        prompt.spec.model.name for prompt in council.creator_prompt_specs
+    ]
     assert council.judge_model == council.judge_prompt_spec.spec.model.name
 
 
@@ -61,7 +84,9 @@ def test_prompt_editor_metadata_lists_and_validates_runtime_variables():
             "council_context",
         }
         assert all(variable["required"] for variable in metadata["variables"])
-        assert all(variable["present_in_template"] for variable in metadata["variables"])
+        assert all(
+            variable["present_in_template"] for variable in metadata["variables"]
+        )
 
 
 def test_council_passes_a_selected_model_as_a_prompt_runtime_override():
@@ -75,11 +100,13 @@ def test_council_passes_a_selected_model_as_a_prompt_runtime_override():
     council = PromptCouncil()
     council.prompt_client = FakePromptClient()
     brief = Brief(outcome="Create an accurate summary")
-    asyncio.run(council.run_prompt(
-        council.creator_prompt_specs[0],
-        {"brief": brief.model_dump(), "council_context": {}},
-        model="gpt-5.6-terra",
-    ))
+    asyncio.run(
+        council.run_prompt(
+            council.creator_prompt_specs[0],
+            {"brief": brief.model_dump(), "council_context": {}},
+            model="gpt-5.6-terra",
+        )
+    )
 
     assert runtimes[0].model == "gpt-5.6-terra"
 
@@ -91,18 +118,23 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
         async def execute(self, _, prepared, runtime=None, output_model=None):
             calls.append(prepared.name)
             if prepared.name == "requirements":
-                return output_model.model_validate({
-                    "goal": "Create an accurate summary",
-                    "inputs": [],
-                    "output_contract": "text",
-                    "constraints": [],
-                    "assumptions": [],
-                    "risks": [],
-            })
+                return output_model.model_validate(
+                    {
+                        "goal": "Create an accurate summary",
+                        "inputs": [],
+                        "output_contract": "text",
+                        "constraints": [],
+                        "assumptions": [],
+                        "risks": [],
+                    }
+                )
             if prepared.name.startswith("creator_"):
                 return {"draft": "A proposal", "rationale": "A rationale"}
             if prepared.name == "judge":
-                return {"final_prompt": "Summarize the input.", "decision_summary": "Combined proposals."}
+                return {
+                    "final_prompt": "Summarize the input.",
+                    "decision_summary": "Combined proposals.",
+                }
             if prepared.name == "test_case_generator":
                 return {
                     "input": "A project update.",
@@ -116,39 +148,68 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
             if prepared.name == "test_judge":
                 return {"score": 0.98, "rationale": "Matches the expectation."}
             if prepared.name == "prompt_compiler":
-                return {"definition": {
-                    "spec_version": "1.0",
-                    "prompt": {
-                        "name": "project-summary",
-                        "description": "Summarizes project updates.",
-                        "used_in": ["backend/tests/test_council_prompts.py"],
-                    },
-                    "model": {"provider": "openai", "name": "gpt-5.6-sol"},
-                    "template": {"system": "Create a concise summary from the input.", "user": "{{input}}"},
-                    "variables": [{"name": "input", "type": "string", "required": True}],
-                    "output": "String",
-                }}
+                return {
+                    "definition": {
+                        "spec_version": "1.0",
+                        "prompt": {
+                            "name": "project-summary",
+                            "description": "Summarizes project updates.",
+                            "used_in": ["backend/tests/test_council_prompts.py"],
+                        },
+                        "model": {"provider": "openai", "name": "gpt-5.6-sol"},
+                        "template": {
+                            "system": "Create a concise summary from the input.",
+                            "user": "{{input}}",
+                        },
+                        "variables": [
+                            {"name": "input", "type": "string", "required": True}
+                        ],
+                        "output": "String",
+                    }
+                }
             raise AssertionError("Unexpected prompt: %s" % prepared.name)
 
     async def collect_items(council):
-        return [item async for item in council.stream(Brief(outcome="Create an accurate summary"))]
+        return [
+            item
+            async for item in council.stream(
+                Brief(outcome="Create an accurate summary")
+            )
+        ]
 
-    council = PromptCouncil(creator_models=["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"])
+    council = PromptCouncil(
+        creator_models=["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"]
+    )
     council.prompt_client = FakePromptClient()
     items = asyncio.run(collect_items(council))
     result = items[-1]
-    stage_events = [(item.stage, item.status) for item in items if hasattr(item, "stage")]
+    stage_events = [
+        (item.stage, item.status) for item in items if hasattr(item, "stage")
+    ]
 
-    assert [creator["model"] for creator in result.creators] == ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"]
+    assert [creator["model"] for creator in result.creators] == [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+    ]
     assert result.prompt_definition["template"]["user"] == "{{input}}"
     assert result.prompt_test["passed"]
-    assert result.prompt_definition["tests"] == [{
-        "name": "Generated self-test fixture",
-        "input": {"input": "A project update."},
-        "expected_output": "A concise summary.",
-    }]
-    assert stage_events.index(("synthesis", "complete")) < stage_events.index(("validation", "started"))
-    assert calls.index("test_case_generator") < calls.index("generated_prompt_under_test") < calls.index("test_judge") < calls.index("prompt_compiler")
+    assert result.prompt_definition["tests"] == [
+        {
+            "name": "Generated self-test fixture",
+            "input": {"input": "A project update."},
+            "expected_output": "A concise summary.",
+        }
+    ]
+    assert stage_events.index(("synthesis", "complete")) < stage_events.index(
+        ("validation", "started")
+    )
+    assert (
+        calls.index("test_case_generator")
+        < calls.index("generated_prompt_under_test")
+        < calls.index("test_judge")
+        < calls.index("prompt_compiler")
+    )
     assert calls[-3:] == ["test_case_generator", "project-summary", "test_judge"]
 
 
@@ -157,10 +218,12 @@ def test_toml_judge_requires_provider_access(monkeypatch):
     council = PromptCouncil()
     brief = Brief(outcome="Create an accurate summary")
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        asyncio.run(council.run_prompt(
-            council.judge_prompt_spec,
-            {"brief": brief.model_dump(), "council_context": {}},
-        ))
+        asyncio.run(
+            council.run_prompt(
+                council.judge_prompt_spec,
+                {"brief": brief.model_dump(), "council_context": {}},
+            )
+        )
 
 
 def test_prompt_defaults_endpoint_exposes_toml_defined_instructions():

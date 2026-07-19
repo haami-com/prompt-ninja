@@ -24,19 +24,25 @@ def test_harness_generates_fixture_runs_prompt_and_judges_result():
     responses = FakeResponses()
     client = SimpleNamespace(responses=responses)
     harness = PromptTestHarness(client=client)
-    result = asyncio.run(harness.run(GeneratedPromptTestRequest(
-        final_prompt="Translate {{meeting_notes}} to English.",
-        goal="Translate French text to English",
-        expected_output="Return the English translation.",
-        model="gpt-5.6-sol",
-    )))
+    result = asyncio.run(
+        harness.run(
+            GeneratedPromptTestRequest(
+                final_prompt="Translate {{meeting_notes}} to English.",
+                goal="Translate French text to English",
+                expected_output="Return the English translation.",
+                model="gpt-5.6-sol",
+            )
+        )
+    )
 
     assert result.passed
     assert result.score == 0.97
     assert result.input == "Bonjour, monde!"
     assert result.actual_output == "Hello, world!"
     assert len(responses.requests) == 3
-    assert "Translate Bonjour, monde! to English." in responses.requests[1]["instructions"]
+    assert (
+        "Translate Bonjour, monde! to English." in responses.requests[1]["instructions"]
+    )
 
 
 def test_harness_executes_the_canonical_definition_with_type_correct_fixture_values():
@@ -56,7 +62,11 @@ def test_harness_executes_the_canonical_definition_with_type_correct_fixture_val
     responses = FakeResponses()
     definition = {
         "spec_version": "1.0",
-        "prompt": {"name": "project-summary", "description": "Summarizes notes.", "used_in": ["backend/tests/test_prompt_testing.py"]},
+        "prompt": {
+            "name": "project-summary",
+            "description": "Summarizes notes.",
+            "used_in": ["backend/tests/test_prompt_testing.py"],
+        },
         "model": {"provider": "openai", "name": "gpt-5.6-sol"},
         "template": {
             "system": "Summarize {{meeting_notes}}.",
@@ -69,26 +79,34 @@ def test_harness_executes_the_canonical_definition_with_type_correct_fixture_val
         ],
         "output": "app.prompt_ninja.JsonObjectOutput",
     }
-    result = asyncio.run(PromptTestHarness(client=SimpleNamespace(responses=responses)).run(
-        GeneratedPromptTestRequest(
-            final_prompt="Fallback prompt text.",
-            goal="Summarize project launch notes",
-            model="gpt-5.6-sol",
-            definition=definition,
+    result = asyncio.run(
+        PromptTestHarness(client=SimpleNamespace(responses=responses)).run(
+            GeneratedPromptTestRequest(
+                final_prompt="Fallback prompt text.",
+                goal="Summarize project launch notes",
+                model="gpt-5.6-sol",
+                definition=definition,
+            )
         )
-    ))
+    )
 
     execution_request = responses.requests[1]
     assert "Summarize Project launch notes." in execution_request["instructions"]
-    assert 'Limit 1. Metadata: {"input": "Project launch notes"}' in execution_request["input"]
+    assert (
+        'Limit 1. Metadata: {"input": "Project launch notes"}'
+        in execution_request["input"]
+    )
     assert result.passed
 
 
 def test_generated_prompt_test_endpoint_requires_a_configured_provider(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    response = TestClient(app).post("/api/test-generated", json={
-        "final_prompt": "Translate the user's text to English.",
-        "goal": "Translate French text to English",
-        "model": "gpt-5.6-sol",
-    })
+    response = TestClient(app).post(
+        "/api/test-generated",
+        json={
+            "final_prompt": "Translate the user's text to English.",
+            "goal": "Translate French text to English",
+            "model": "gpt-5.6-sol",
+        },
+    )
     assert response.status_code == 503

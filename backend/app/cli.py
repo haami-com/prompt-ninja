@@ -21,7 +21,9 @@ from .prompt_ninja import (
     PromptTestReport,
 )
 
-TEST_JUDGE_PROMPT_FILE = Path(__file__).resolve().parents[1] / "prompts" / "test-judge.prompt.toml"
+TEST_JUDGE_PROMPT_FILE = (
+    Path(__file__).resolve().parents[1] / "prompts" / "test-judge.prompt.toml"
+)
 
 UPDATE_PROMPT = PromptNinja(
     {
@@ -36,7 +38,7 @@ UPDATE_PROMPT = PromptNinja(
             "system": (
                 "You update Prompt Ninja prompt files. Apply the feedback to the TOML prompt file. "
                 "Return only a complete, valid *.prompt.toml document; do not use Markdown fences. "
-                "Preserve spec_version = \"1.0\" and every required section. "
+                'Preserve spec_version = "1.0" and every required section. '
                 "The top-level output value must be String, BigInt, or a dotted path to an "
                 "existing importable Pydantic BaseModel class. When feedback says an output "
                 "model cannot be imported, use an existing model path only when the prompt "
@@ -65,7 +67,9 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise click.ClickException("Could not read %s: %s" % (path, exc)) from exc
     brief = loaded.get("brief", loaded)
     if not isinstance(brief, dict):
-        raise click.ClickException("%s must contain top-level fields or a [brief] table." % path)
+        raise click.ClickException(
+            "%s must contain top-level fields or a [brief] table." % path
+        )
     return brief
 
 
@@ -97,13 +101,17 @@ def _prompt_path(path: Path | None) -> Path:
         return path
     matches = sorted(Path("prompts").glob("*.prompt.toml"))
     if not matches:
-        raise click.ClickException("No prompt file found. Pass --prompt or run generate first.")
+        raise click.ClickException(
+            "No prompt file found. Pass --prompt or run generate first."
+        )
     return matches[0]
 
 
 def _openai_executor(prompt: PromptNinja):
     if not os.getenv("OPENAI_API_KEY"):
-        raise click.ClickException("OPENAI_API_KEY is required to run LLM prompt tests.")
+        raise click.ClickException(
+            "OPENAI_API_KEY is required to run LLM prompt tests."
+        )
     client = OpenAIPromptClient()
 
     async def execute(prepared):
@@ -135,7 +143,11 @@ def _show_report(report: PromptTestReport, verbose: bool) -> None:
         click.echo("%s: no embedded test cases (skipped)" % report.prompt_name)
         return
     for result in report.results:
-        state = click.style("PASS", fg="green") if result.passed else click.style("FAIL", fg="red")
+        state = (
+            click.style("PASS", fg="green")
+            if result.passed
+            else click.style("FAIL", fg="red")
+        )
         score = "" if result.score is None else " (score %.2f)" % result.score
         click.echo("%s %s — %s%s" % (state, report.prompt_name, result.name, score))
         if verbose and result.passed:
@@ -155,12 +167,16 @@ def _strip_toml_fence(value: str) -> str:
 
 async def _repair_prompt_file(prompt_file: Path, feedback: str, model: str) -> str:
     original = prompt_file.read_text(encoding="utf-8")
-    updated = await UPDATE_PROMPT.run_openai({"prompt_toml": original, "feedback": feedback}, model=model)
+    updated = await UPDATE_PROMPT.run_openai(
+        {"prompt_toml": original, "feedback": feedback}, model=model
+    )
     candidate = _strip_toml_fence(updated)
     try:
         PromptNinja(tomllib.loads(candidate), source=str(prompt_file))
     except (tomllib.TOMLDecodeError, PromptNinjaError) as exc:
-        raise click.ClickException("The model returned an invalid prompt file: %s" % exc) from exc
+        raise click.ClickException(
+            "The model returned an invalid prompt file: %s" % exc
+        ) from exc
     backup = prompt_file.with_suffix(prompt_file.suffix + ".bak")
     backup.write_text(original, encoding="utf-8")
     prompt_file.write_text(candidate + "\n", encoding="utf-8")
@@ -180,14 +196,24 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--goal", help="Goal to generate a prompt for.")
-@click.option("--config", "config_path", type=click.Path(path_type=Path), default=Path("prompt-ninja.toml"), show_default=True)
-@click.option("--output", type=click.Path(path_type=Path), help="Destination *.prompt.toml file.")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path),
+    default=Path("prompt-ninja.toml"),
+    show_default=True,
+)
+@click.option(
+    "--output", type=click.Path(path_type=Path), help="Destination *.prompt.toml file."
+)
 def generate(goal: str | None, config_path: Path, output: Path | None) -> None:
     """Generate a validated prompt TOML file from a goal."""
     config = _load_config(config_path)
     resolved_goal = goal or config.get("goal") or config.get("outcome")
     if not isinstance(resolved_goal, str) or len(resolved_goal.strip()) < 8:
-        raise click.UsageError("Provide --goal (at least 8 characters) or set goal in prompt-ninja.toml.")
+        raise click.UsageError(
+            "Provide --goal (at least 8 characters) or set goal in prompt-ninja.toml."
+        )
     brief = Brief(
         outcome=resolved_goal,
         context=str(config.get("context", "")),
@@ -202,9 +228,16 @@ def generate(goal: str | None, config_path: Path, output: Path | None) -> None:
 
 
 @cli.command("test")
-@click.option("--prompt", "prompt_path", type=click.Path(path_type=Path), help="Prompt file to test.")
+@click.option(
+    "--prompt",
+    "prompt_path",
+    type=click.Path(path_type=Path),
+    help="Prompt file to test.",
+)
 @click.option("--judge-model", default=DEFAULT_MODEL, show_default=True)
-@click.option("--verbose", "-v", is_flag=True, help="Show model output for passing cases.")
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Show model output for passing cases."
+)
 def test_prompt(prompt_path: Path | None, judge_model: str, verbose: bool) -> None:
     """Run a prompt's embedded examples and score them with an LLM judge."""
     prompt = PromptNinja.from_file(_prompt_path(prompt_path))
@@ -215,11 +248,23 @@ def test_prompt(prompt_path: Path | None, judge_model: str, verbose: bool) -> No
 
 
 @cli.command("test-prompts")
-@click.option("--prompts-dir", "-t", type=click.Path(path_type=Path), default=Path("prompts"), show_default=True)
-@click.option("--prompt-name", "-p", help="Run only the prompt with this [prompt].name.")
+@click.option(
+    "--prompts-dir",
+    "-t",
+    type=click.Path(path_type=Path),
+    default=Path("prompts"),
+    show_default=True,
+)
+@click.option(
+    "--prompt-name", "-p", help="Run only the prompt with this [prompt].name."
+)
 @click.option("--judge-model", default=DEFAULT_MODEL, show_default=True)
-@click.option("--verbose", "-v", is_flag=True, help="Show model output for passing cases.")
-def test_prompts(prompts_dir: Path, prompt_name: str | None, judge_model: str, verbose: bool) -> None:
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Show model output for passing cases."
+)
+def test_prompts(
+    prompts_dir: Path, prompt_name: str | None, judge_model: str, verbose: bool
+) -> None:
     """Run embedded test cases across pipeline prompt TOML files."""
     paths = sorted(prompts_dir.glob("*.prompt.toml"))
     if not paths:
@@ -231,7 +276,9 @@ def test_prompts(prompts_dir: Path, prompt_name: str | None, judge_model: str, v
             continue
         reports.append(asyncio.run(_run_tests(prompt, judge_model)))
     if prompt_name and not reports:
-        raise click.ClickException("No prompt named %r found in %s." % (prompt_name, prompts_dir))
+        raise click.ClickException(
+            "No prompt named %r found in %s." % (prompt_name, prompts_dir)
+        )
     for report in reports:
         _show_report(report, verbose)
     if any(not report.passed for report in reports):
@@ -239,7 +286,9 @@ def test_prompts(prompts_dir: Path, prompt_name: str | None, judge_model: str, v
 
 
 @cli.command()
-@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "prompt_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
 @click.argument("feedback")
 @click.option("--model", default=DEFAULT_MODEL, show_default=True)
 def update(prompt_file: Path, feedback: str, model: str) -> None:
@@ -247,14 +296,18 @@ def update(prompt_file: Path, feedback: str, model: str) -> None:
     if not prompt_file.name.endswith(".prompt.toml"):
         raise click.UsageError("prompt_file must use the .prompt.toml extension.")
     if not os.getenv("OPENAI_API_KEY"):
-        raise click.ClickException("OPENAI_API_KEY is required to update a prompt with LLM feedback.")
+        raise click.ClickException(
+            "OPENAI_API_KEY is required to update a prompt with LLM feedback."
+        )
     backup = asyncio.run(_repair_prompt_file(prompt_file, feedback, model))
     click.echo("Updated %s (backup: %s)" % (prompt_file, backup))
 
 
 @cli.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
-@click.option("--fix", is_flag=True, help="Use the LLM updater to repair invalid prompt files.")
+@click.option(
+    "--fix", is_flag=True, help="Use the LLM updater to repair invalid prompt files."
+)
 @click.option("--model", default=DEFAULT_MODEL, show_default=True)
 def validate(path: Path, fix: bool, model: str) -> None:
     """Validate one *.prompt.toml file or every such file in a directory."""
@@ -270,7 +323,9 @@ def validate(path: Path, fix: bool, model: str) -> None:
             click.echo(click.style("VALID", fg="green") + " " + str(prompt_file))
         except PromptNinjaError as exc:
             failures += 1
-            click.echo(click.style("INVALID", fg="red") + " " + str(prompt_file), err=True)
+            click.echo(
+                click.style("INVALID", fg="red") + " " + str(prompt_file), err=True
+            )
             click.echo(str(exc), err=True)
             if fix:
                 feedback = (
@@ -281,10 +336,15 @@ def validate(path: Path, fix: bool, model: str) -> None:
                     % exc
                 )
                 try:
-                    backup = asyncio.run(_repair_prompt_file(prompt_file, feedback, model))
+                    backup = asyncio.run(
+                        _repair_prompt_file(prompt_file, feedback, model)
+                    )
                     PromptNinja.from_file(prompt_file)
                     failures -= 1
-                    click.echo(click.style("FIXED", fg="green") + " %s (backup: %s)" % (prompt_file, backup))
+                    click.echo(
+                        click.style("FIXED", fg="green")
+                        + " %s (backup: %s)" % (prompt_file, backup)
+                    )
                 except click.ClickException as repair_error:
                     click.echo("Fix failed: %s" % repair_error, err=True)
     if failures:

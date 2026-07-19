@@ -5,7 +5,6 @@ from .model_config import DEFAULT_MODEL
 from .models import BriefEnhancementResult
 from .prompt_ninja import PromptNinja
 
-
 BRIEF_ENHANCER_PROMPT_FILE = (
     Path(__file__).resolve().parents[1] / "prompts" / "brief-enhancer.prompt.toml"
 )

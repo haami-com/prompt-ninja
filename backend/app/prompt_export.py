@@ -7,12 +7,13 @@ import re
 from .models import PromptExportRequest
 from .prompt_ninja import PromptNinja
 
-
 _TEMPLATE_VARIABLE_PATTERN = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 def prompt_filename(goal: str) -> str:
-    name = re.sub(r"[^a-z0-9]+", "-", goal.lower()).strip("-")[:60] or "generated-prompt"
+    name = (
+        re.sub(r"[^a-z0-9]+", "-", goal.lower()).strip("-")[:60] or "generated-prompt"
+    )
     return name + ".prompt.toml"
 
 
@@ -21,7 +22,12 @@ def prompt_from_export_request(request: PromptExportRequest) -> PromptNinja:
     if request.definition is not None:
         return PromptNinja(request.definition, source="<prompt export>")
     name = prompt_filename(request.goal).removesuffix(".prompt.toml")
-    variable_names = ["input", *sorted(set(_TEMPLATE_VARIABLE_PATTERN.findall(request.final_prompt)) - {"input"})]
+    variable_names = [
+        "input",
+        *sorted(
+            set(_TEMPLATE_VARIABLE_PATTERN.findall(request.final_prompt)) - {"input"}
+        ),
+    ]
     return PromptNinja(
         {
             "spec_version": "1.0",

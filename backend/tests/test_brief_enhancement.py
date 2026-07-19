@@ -31,15 +31,25 @@ def test_brief_enhancer_preserves_numbered_file_context_in_openai_request():
             return SimpleNamespace(output_parsed=enhancement_result())
 
     responses = FakeResponses()
-    result = asyncio.run(BriefEnhancer(
-        client=SimpleNamespace(responses=responses)
-    ).enhance(
-        "Use File #1 for facts and File #2 for tone.",
-        [
-            {"number": 1, "label": "File #1", "name": "notes.txt", "content": "Launch is Friday."},
-            {"number": 2, "label": "File #2", "name": "voice.md", "content": "Write directly."},
-        ],
-    ))
+    result = asyncio.run(
+        BriefEnhancer(client=SimpleNamespace(responses=responses)).enhance(
+            "Use File #1 for facts and File #2 for tone.",
+            [
+                {
+                    "number": 1,
+                    "label": "File #1",
+                    "name": "notes.txt",
+                    "content": "Launch is Friday.",
+                },
+                {
+                    "number": 2,
+                    "label": "File #2",
+                    "name": "voice.md",
+                    "content": "Write directly.",
+                },
+            ],
+        )
+    )
 
     assert result.file_references == ["File #1", "File #2"]
     assert "File #1" in responses.request["input"]
@@ -59,12 +69,19 @@ def test_brief_enhancer_rejects_a_reference_to_a_file_that_was_not_uploaded():
             return SimpleNamespace(output_text=invalid.model_dump_json())
 
     with pytest.raises(ValueError, match="File #3"):
-        asyncio.run(BriefEnhancer(
-            client=SimpleNamespace(responses=FakeResponses())
-        ).enhance(
-            "Use File #1 to create a project update.",
-            [{"number": 1, "label": "File #1", "name": "notes.txt", "content": "Launch is Friday."}],
-        ))
+        asyncio.run(
+            BriefEnhancer(client=SimpleNamespace(responses=FakeResponses())).enhance(
+                "Use File #1 to create a project update.",
+                [
+                    {
+                        "number": 1,
+                        "label": "File #1",
+                        "name": "notes.txt",
+                        "content": "Launch is Friday.",
+                    }
+                ],
+            )
+        )
 
 
 def test_enhance_endpoint_assigns_stable_file_numbers(monkeypatch):
@@ -88,8 +105,14 @@ def test_enhance_endpoint_assigns_stable_file_numbers(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert [source["label"] for source in captured["file_sources"]] == ["File #1", "File #2"]
-    assert [source["name"] for source in captured["file_sources"]] == ["notes.txt", "voice.md"]
+    assert [source["label"] for source in captured["file_sources"]] == [
+        "File #1",
+        "File #2",
+    ]
+    assert [source["name"] for source in captured["file_sources"]] == [
+        "notes.txt",
+        "voice.md",
+    ]
     assert response.json()["file_references"] == ["File #1", "File #2"]
 
 

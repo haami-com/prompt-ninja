@@ -19,8 +19,15 @@ from pathlib import Path, PurePosixPath
 from collections.abc import Awaitable
 from typing import Any, Callable, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError, field_validator, model_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 SUPPORTED_SPEC_VERSION = "1.0"
 VariableType = Literal["string", "integer", "number", "boolean", "array", "object"]
@@ -45,7 +52,11 @@ class PromptOutputError(PromptNinjaError):
 
 
 def _toml_key(key: str) -> str:
-    return key if _TOML_BARE_KEY_PATTERN.fullmatch(key) else json.dumps(key, ensure_ascii=False)
+    return (
+        key
+        if _TOML_BARE_KEY_PATTERN.fullmatch(key)
+        else json.dumps(key, ensure_ascii=False)
+    )
 
 
 def _toml_value(value: Any) -> str:
@@ -58,10 +69,14 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(
-            "%s = %s" % (_toml_key(str(key)), _toml_value(item))
-            for key, item in value.items()
-        ) + " }"
+        return (
+            "{ "
+            + ", ".join(
+                "%s = %s" % (_toml_key(str(key)), _toml_value(item))
+                for key, item in value.items()
+            )
+            + " }"
+        )
     raise PromptNinjaError("Cannot serialize %r to TOML." % (type(value).__name__,))
 
 
@@ -109,6 +124,7 @@ class ModelConfig(SpecModel):
             raise ValueError("must not be blank")
         return value
 
+
 class TemplateSpec(SpecModel):
     system: str = ""
     user: str = ""
@@ -121,7 +137,9 @@ class TemplateSpec(SpecModel):
 
     @property
     def referenced_variables(self) -> set[str]:
-        return set(_VARIABLE_PATTERN.findall(self.system)) | set(_VARIABLE_PATTERN.findall(self.user))
+        return set(_VARIABLE_PATTERN.findall(self.system)) | set(
+            _VARIABLE_PATTERN.findall(self.user)
+        )
 
 
 class VariableSpec(SpecModel):
@@ -215,9 +233,7 @@ class PromptFileSpec(SpecModel):
             r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
             value,
         ):
-            raise ValueError(
-                "must be String, BigInt, or a dotted Pydantic model path"
-            )
+            raise ValueError("must be String, BigInt, or a dotted Pydantic model path")
         return value
 
     @model_validator(mode="after")
@@ -227,7 +243,10 @@ class PromptFileSpec(SpecModel):
             raise ValueError("variable names must be unique")
         undeclared = sorted(self.template.referenced_variables - set(variables))
         if undeclared:
-            raise ValueError("template variables have no [[variables]] definition: %s" % ", ".join(undeclared))
+            raise ValueError(
+                "template variables have no [[variables]] definition: %s"
+                % ", ".join(undeclared)
+            )
         missing_required = sorted(
             name
             for name, variable in variables.items()
@@ -241,10 +260,16 @@ class PromptFileSpec(SpecModel):
         for test in self.tests:
             unknown = sorted(set(test.input) - set(variables))
             if unknown:
-                raise ValueError("test %r uses undeclared variables: %s" % (test.name, ", ".join(unknown)))
+                raise ValueError(
+                    "test %r uses undeclared variables: %s"
+                    % (test.name, ", ".join(unknown))
+                )
             for name, value in test.input.items():
                 if not variables[name].accepts(value):
-                    raise ValueError("test %r input %r must have type %s" % (test.name, name, variables[name].type))
+                    raise ValueError(
+                        "test %r input %r must have type %s"
+                        % (test.name, name, variables[name].type)
+                    )
         return self
 
 
@@ -432,9 +457,11 @@ def _prepare_prompt(
         provider=spec.model.provider,
         model=spec.model.name,
         system=_render_template(
-            system_override
-            if system_override and system_override.strip()
-            else spec.template.system,
+            (
+                system_override
+                if system_override and system_override.strip()
+                else spec.template.system
+            ),
             resolved,
         ),
         user=_render_template(spec.template.user, resolved),
@@ -484,9 +511,7 @@ def _run_prompt_tests(
                 )
             actual = prompt.run(test.input, executor)
             if not _contains_expected(actual, test.expected):
-                raise PromptOutputError(
-                    "Output did not contain the expected values."
-                )
+                raise PromptOutputError("Output did not contain the expected values.")
             results.append(
                 PromptTestResult(
                     name=name,
@@ -522,8 +547,7 @@ async def _run_prompt_tests_async(
             if test.expected_output is not None:
                 if judge is None:
                     raise PromptNinjaError(
-                        "Test %r uses expected_output and requires an LLM judge."
-                        % name
+                        "Test %r uses expected_output and requires an LLM judge." % name
                     )
                 verdict = TestJudgment.model_validate(await judge(test, actual))
                 results.append(
@@ -537,9 +561,7 @@ async def _run_prompt_tests_async(
                     )
                 )
             elif not _contains_expected(actual, test.expected):
-                raise PromptOutputError(
-                    "Output did not contain the expected values."
-                )
+                raise PromptOutputError("Output did not contain the expected values.")
             else:
                 results.append(
                     PromptTestResult(
@@ -565,7 +587,12 @@ async def _run_prompt_tests_async(
 class SamplingRunHook:
     """Forward a stable sample of complete runs to a storage or auto-fix sink."""
 
-    def __init__(self, sink: PromptRunHook, sample_rate: float = 0.1, random_value: Callable[[], float] = random.random):
+    def __init__(
+        self,
+        sink: PromptRunHook,
+        sample_rate: float = 0.1,
+        random_value: Callable[[], float] = random.random,
+    ):
         if not 0 <= sample_rate <= 1:
             raise ValueError("sample_rate must be between 0 and 1.")
         self.sink = sink
@@ -601,7 +628,9 @@ class OpenAIPromptClient:
         hooks: tuple[PromptRunHook, ...] = (),
     ) -> Any:
         if prepared.provider != "openai":
-            raise PromptNinjaError("OpenAI execution requires model.provider = 'openai'.")
+            raise PromptNinjaError(
+                "OpenAI execution requires model.provider = 'openai'."
+            )
         if self.client is None:
             from openai import AsyncOpenAI
 
@@ -691,23 +720,32 @@ class PromptNinja:
         """Load a prompt definition from a file with the required extension."""
         prompt_path = Path(path)
         if not prompt_path.name.endswith(".prompt.toml"):
-            raise PromptValidationError("Prompt files must use the .prompt.toml extension.")
+            raise PromptValidationError(
+                "Prompt files must use the .prompt.toml extension."
+            )
         try:
             with prompt_path.open("rb") as prompt_file:
                 definition = tomllib.load(prompt_file)
         except OSError as exc:
-            raise PromptNinjaError("Unable to read prompt file %s: %s" % (prompt_path, exc)) from exc
+            raise PromptNinjaError(
+                "Unable to read prompt file %s: %s" % (prompt_path, exc)
+            ) from exc
         except tomllib.TOMLDecodeError as exc:
-            raise PromptValidationError("Invalid TOML in %s: %s" % (prompt_path, exc)) from exc
+            raise PromptValidationError(
+                "Invalid TOML in %s: %s" % (prompt_path, exc)
+            ) from exc
         return cls(definition, source=str(prompt_path))
 
     def to_toml(self) -> str:
         """Serialize this validated prompt definition as a TOML document."""
         definition = self.spec.model_dump(by_alias=True, exclude_none=True)
-        return "\n".join(
-            "%s = %s" % (_toml_key(key), _toml_value(value))
-            for key, value in definition.items()
-        ) + "\n"
+        return (
+            "\n".join(
+                "%s = %s" % (_toml_key(key), _toml_value(value))
+                for key, value in definition.items()
+            )
+            + "\n"
+        )
 
     @property
     def name(self) -> str:
@@ -738,27 +776,37 @@ class PromptNinja:
         self.spec = _parse_prompt_spec(self.definition, self.source)
         self._output_model = _resolve_output_model(self.spec.output)
 
-    def prepare(self, values: Mapping[str, Any], system_override: str | None = None) -> PreparedPrompt:
+    def prepare(
+        self, values: Mapping[str, Any], system_override: str | None = None
+    ) -> PreparedPrompt:
         """Validate variables and render system/user message templates."""
         return _prepare_prompt(self.spec, values, system_override)
 
     def run(self, values: Mapping[str, Any], executor: PromptExecutor) -> Any:
         """Prepare the prompt, execute it through ``executor``, and validate its output."""
         if not callable(executor):
-            raise PromptNinjaError("executor must be a callable that accepts a PreparedPrompt.")
+            raise PromptNinjaError(
+                "executor must be a callable that accepts a PreparedPrompt."
+            )
         return self.validate_output(executor(self.prepare(values)))
 
     def run_tests(self, executor: PromptExecutor) -> PromptTestReport:
         """Execute legacy exact-match test cases against an injected executor."""
         return _run_prompt_tests(self, executor)
 
-    async def arun(self, values: Mapping[str, Any], executor: AsyncPromptExecutor) -> Any:
+    async def arun(
+        self, values: Mapping[str, Any], executor: AsyncPromptExecutor
+    ) -> Any:
         """Async counterpart to :meth:`run` for provider-backed execution."""
         if not callable(executor):
-            raise PromptNinjaError("executor must be an async callable that accepts a PreparedPrompt.")
+            raise PromptNinjaError(
+                "executor must be an async callable that accepts a PreparedPrompt."
+            )
         return self.validate_output(await executor(self.prepare(values)))
 
-    async def arun_tests(self, executor: AsyncPromptExecutor, judge: AsyncTestJudge | None = None) -> PromptTestReport:
+    async def arun_tests(
+        self, executor: AsyncPromptExecutor, judge: AsyncTestJudge | None = None
+    ) -> PromptTestReport:
         """Run embedded tests, using ``judge`` for natural-language expectations."""
         return await _run_prompt_tests_async(self, executor, judge)
 
