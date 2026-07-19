@@ -10,8 +10,9 @@ from pydantic import BaseModel
 
 from dotenv import load_dotenv
 
-from .models import AgentMessage, Brief, CouncilResult, PromptSpec, RequirementsResult
+from .models import AgentMessage, Brief, CouncilResult, GeneratedPromptTestRequest, PromptSpec
 from .prompt_ninja import OpenAIPromptClient, PreparedPrompt, PromptNinja, PromptRuntimeOptions
+from .prompt_testing import PromptTestHarness, fixture_values_for_prompt
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -19,16 +20,48 @@ PROMPTS_DIRECTORY = Path(__file__).resolve().parents[1] / "prompts"
 CREATOR_PROMPT_FILES = tuple(PROMPTS_DIRECTORY / f"creator-{slot}.prompt.toml" for slot in range(1, 4))
 JUDGE_PROMPT_FILE = PROMPTS_DIRECTORY / "judge.prompt.toml"
 REQUIREMENTS_PROMPT_FILE = PROMPTS_DIRECTORY / "requirements.prompt.toml"
+COMPILER_PROMPT_FILE = PROMPTS_DIRECTORY / "prompt-compiler.prompt.toml"
 
 
 def _load_prompt(path: Path) -> PromptNinja:
     return PromptNinja.from_file(path)
 
 
-def default_agent_instructions() -> dict[str, list[str] | str]:
+def _editor_metadata(prompt: PromptNinja) -> dict[str, Any]:
+    referenced = prompt.spec.template.referenced_variables
+    variables = [
+        {
+            "name": variable.name,
+            "type": variable.type,
+            "required": variable.required,
+            "present_in_template": variable.name in referenced,
+        }
+        for variable in prompt.spec.variables
+    ]
+    missing = [
+        variable["name"]
+        for variable in variables
+        if variable["required"] and not variable["present_in_template"]
+    ]
+    return {
+        "variables": variables,
+        "valid": not missing,
+        "missing_variables": missing,
+    }
+
+
+def default_agent_instructions() -> dict[str, Any]:
     """Expose TOML-defined defaults for the optional prompt editor."""
-    creator_instructions = [_load_prompt(path).spec.template.system for path in CREATOR_PROMPT_FILES]
-    return {"creators": creator_instructions, "judge": _load_prompt(JUDGE_PROMPT_FILE).spec.template.system}
+    creator_prompts = [_load_prompt(path) for path in CREATOR_PROMPT_FILES]
+    judge_prompt = _load_prompt(JUDGE_PROMPT_FILE)
+    return {
+        "creators": [prompt.spec.template.system for prompt in creator_prompts],
+        "judge": judge_prompt.spec.template.system,
+        "metadata": {
+            "creators": [_editor_metadata(prompt) for prompt in creator_prompts],
+            "judge": _editor_metadata(judge_prompt),
+        },
+    }
 
 
 class PromptCouncil:
@@ -36,11 +69,14 @@ class PromptCouncil:
         self.prompt_client = None
         if os.getenv("OPENAI_API_KEY"):
             self.prompt_client = OpenAIPromptClient()
-        self.creator_models = creator_models or ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"]
-        self.judge_model = judge_model or "gpt-5.6-terra"
         self.requirements_prompt_spec = _load_prompt(REQUIREMENTS_PROMPT_FILE)
         self.creator_prompt_specs = [_load_prompt(path) for path in CREATOR_PROMPT_FILES]
         self.judge_prompt_spec = _load_prompt(JUDGE_PROMPT_FILE)
+        self.compiler_prompt_spec = _load_prompt(COMPILER_PROMPT_FILE)
+        self.creator_models = creator_models or [
+            prompt.spec.model.name for prompt in self.creator_prompt_specs
+        ]
+        self.judge_model = judge_model or self.judge_prompt_spec.spec.model.name
         overrides = creator_prompts or []
         self.creator_prompts = [overrides[index] if index < len(overrides) else "" for index in range(3)]
         self.judge_prompt = judge_prompt or ""
@@ -59,12 +95,18 @@ class PromptCouncil:
         if not self.prompt_client:
             raise RuntimeError("The TOML-defined prompt requires OPENAI_API_KEY to run.")
         runtime = PromptRuntimeOptions(model=model) if model else None
-        output = await self.prompt_client.execute(prompt, prepared, runtime=runtime, output_model=output_model)
+        effective_output_model = output_model or prompt.output_model
+        output = await self.prompt_client.execute(
+            prompt,
+            prepared,
+            runtime=runtime,
+            output_model=effective_output_model,
+        )
         return output.model_dump() if isinstance(output, BaseModel) else output, prepared
 
     async def stream(self, brief: Brief) -> AsyncIterator[AgentMessage | CouncilResult]:
         agents: list[AgentMessage] = []
-        prompt_trace = {"requirements": {}, "creators": [], "judge": {}}
+        prompt_trace = {"requirements": {}, "creators": [], "judge": {}, "compiler": {}}
 
         async def run_started(stage: str, agent: str, title: str):
             message = AgentMessage(stage=stage, agent=agent, status="started", title=title)
@@ -75,7 +117,7 @@ class PromptCouncil:
         requirements, requirements_prompt = await self.run_prompt(
             self.requirements_prompt_spec,
             {"brief": brief.model_dump(), "council_context": {}},
-            output_model=RequirementsResult,
+            model=self.requirements_prompt_spec.spec.model.name,
         )
         prompt_trace["requirements"] = {"system_prompt": requirements_prompt.system, "input_context": requirements_prompt.user}
         yield AgentMessage(stage="requirements", agent="Requirements", status="complete", title="Requirements analyst", summary="Mapped the requested outcome into an output contract.", payload=requirements)
@@ -97,7 +139,7 @@ class PromptCouncil:
         ])
         creator_outputs = []
         for slot, model, output, prompt in creator_runs:
-            creator_outputs.append(output)
+            creator_outputs.append({"model": model, **output})
             prompt_trace["creators"].append({"slot": slot, "model": model, "system_prompt": prompt.system, "input_context": prompt.user})
             yield AgentMessage(stage=f"creator_{slot}", agent=f"Creator {slot}", status="complete", title=f"Prompt creator · {model}", summary=output.get("rationale", "Created a TOML-defined prompt proposal."), payload=output)
 
@@ -110,6 +152,49 @@ class PromptCouncil:
             system_override=self.judge_prompt,
         )
         prompt_trace["judge"] = {"model": self.judge_model, "system_prompt": judge_prompt.system, "input_context": judge_prompt.user}
+        yield AgentMessage(stage="synthesis", agent="Judge", status="complete", title=f"Final judge · {self.judge_model}", summary=judged.get("decision_summary", "Compared creator proposals and selected the strongest result."), payload={"decision_summary": judged.get("decision_summary", ""), "model": self.judge_model})
+        yield await run_started("validation", "Prompt validation", "Self-test and compiler")
+        candidate_test = await PromptTestHarness(prompt_client=self.prompt_client).run(GeneratedPromptTestRequest(
+            final_prompt=judged["final_prompt"],
+            goal=brief.outcome,
+            context=brief.context,
+            expected_output=brief.expected_output,
+            model=self.judge_model,
+            judge_model=self.judge_model,
+        ))
+        compiled, compiler_prompt = await self.run_prompt(
+            self.compiler_prompt_spec,
+            {
+                "goal": brief.outcome,
+                "model": self.judge_model,
+                "requirements": requirements,
+                "candidate_prompt": judged["final_prompt"],
+                "test_result": candidate_test.model_dump(),
+            },
+            model=self.judge_model,
+        )
+        compiled_prompt = PromptNinja(
+            compiled["definition"],
+            source="<board compiler>",
+        )
+        if not compiled_prompt.tests:
+            compiled_definition = compiled_prompt.spec.model_dump(by_alias=True, exclude_none=True)
+            compiled_definition["tests"] = [{
+                "name": "Generated self-test fixture",
+                "input": fixture_values_for_prompt(compiled_prompt, candidate_test.input),
+                "expected_output": candidate_test.expected_output,
+            }]
+            compiled_prompt = PromptNinja(compiled_definition, source="<board compiler>")
+        prompt_test = await PromptTestHarness(prompt_client=self.prompt_client).run(GeneratedPromptTestRequest(
+            final_prompt=compiled_prompt.spec.template.system,
+            goal=brief.outcome,
+            context=brief.context,
+            expected_output=brief.expected_output,
+            model=self.judge_model,
+            judge_model=self.judge_model,
+            definition=compiled_prompt.spec.model_dump(by_alias=True, exclude_none=True),
+        ))
+        prompt_trace["compiler"] = {"model": self.judge_model, "system_prompt": compiler_prompt.system, "input_context": compiler_prompt.user}
         spec = PromptSpec.model_validate({
             "goal": requirements.get("goal", brief.outcome),
             "inputs": requirements.get("inputs", []),
@@ -117,5 +202,15 @@ class PromptCouncil:
             "constraints": requirements.get("constraints", []),
             "assumptions": requirements.get("assumptions", []),
         })
-        yield AgentMessage(stage="synthesis", agent="Judge", status="complete", title=f"Final judge · {self.judge_model}", summary=judged.get("decision_summary", "Compared creator proposals and selected the strongest result."), payload={"decision_summary": judged.get("decision_summary", ""), "model": self.judge_model})
-        yield CouncilResult(final_prompt=judged["final_prompt"], prompt_spec=spec, agents=agents, creators=creator_outputs, judge_model=self.judge_model, judge_summary=judged.get("decision_summary", ""), prompt_trace=prompt_trace)
+        yield AgentMessage(stage="validation", agent="Prompt validation", status="complete", title="Self-test and compiler", summary="Validated the compiled Prompt Ninja definition.", payload=prompt_test.model_dump())
+        yield CouncilResult(
+            final_prompt=compiled_prompt.spec.template.system,
+            prompt_spec=spec,
+            prompt_definition=compiled_prompt.spec.model_dump(by_alias=True, exclude_none=True),
+            prompt_test=prompt_test.model_dump(),
+            agents=agents,
+            creators=creator_outputs,
+            judge_model=self.judge_model,
+            judge_summary=judged.get("decision_summary", ""),
+            prompt_trace=prompt_trace,
+        )

@@ -1,15 +1,14 @@
 spec_version = "1.0"
+output = "app.models.GreetingResult"
 
 [prompt]
 name = "greeting"
 description = "Returns a concise greeting for a named person."
-used_in = ["prompt-council"]
+used_in = ["README.md", "backend/tests/test_prompt_ninja.py"]
 
 [model]
 provider = "openai"
 name = "gpt-5.6"
-temperature = 0
-max_output_tokens = 100
 
 [template]
 system = """
@@ -31,16 +30,6 @@ name = "tone"
 type = "string"
 required = false
 default = "friendly"
-
-[output]
-format = "json"
-
-[output.schema]
-type = "object"
-required = ["result"]
-
-[output.schema.properties.result]
-type = "string"
 
 [[tests]]
 name = "friendly greeting"

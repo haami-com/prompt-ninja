@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -13,8 +11,15 @@ from typing import Any
 import click
 
 from .agents import PromptCouncil
-from .models import Brief, CouncilResult
-from .prompt_ninja import PromptNinja, PromptNinjaError, PromptTestReport
+from .model_config import DEFAULT_MODEL
+from .models import Brief, CouncilResult, PromptExportRequest
+from .prompt_export import prompt_filename, prompt_from_export_request
+from .prompt_ninja import (
+    OpenAIPromptClient,
+    PromptNinja,
+    PromptNinjaError,
+    PromptTestReport,
+)
 
 TEST_JUDGE_PROMPT_FILE = Path(__file__).resolve().parents[1] / "prompts" / "test-judge.prompt.toml"
 
@@ -24,14 +29,19 @@ UPDATE_PROMPT = PromptNinja(
         "prompt": {
             "name": "prompt_updater",
             "description": "Updates a Prompt Ninja TOML file from concise feedback.",
-            "used_in": ["prompt-ninja-cli"],
+            "used_in": ["backend/app/cli.py"],
         },
-        "model": {"provider": "openai", "name": "gpt-5.6-terra"},
+        "model": {"provider": "openai", "name": DEFAULT_MODEL},
         "template": {
             "system": (
                 "You update Prompt Ninja prompt files. Apply the feedback to the TOML prompt file. "
                 "Return only a complete, valid *.prompt.toml document; do not use Markdown fences. "
-                "Preserve spec_version = \"1.0\" and every required section."
+                "Preserve spec_version = \"1.0\" and every required section. "
+                "The top-level output value must be String, BigInt, or a dotted path to an "
+                "existing importable Pydantic BaseModel class. When feedback says an output "
+                "model cannot be imported, use an existing model path only when the prompt "
+                "clearly requires that model; otherwise use String for text or BigInt for an integer. "
+                "Never invent a replacement model path."
             ),
             "user": "PROMPT FILE:\n{{prompt_toml}}\n\nFEEDBACK:\n{{feedback}}",
         },
@@ -39,7 +49,7 @@ UPDATE_PROMPT = PromptNinja(
             {"name": "prompt_toml", "type": "string", "required": True},
             {"name": "feedback", "type": "string", "required": True},
         ],
-        "output": {"format": "text"},
+        "output": "String",
     },
     source="<built-in update prompt>",
 )
@@ -59,48 +69,17 @@ def _load_config(path: Path) -> dict[str, Any]:
     return brief
 
 
-def _slug(value: str) -> str:
-    result = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return result[:60] or "generated-prompt"
-
-
-def _toml_string(value: str) -> str:
-    """JSON string syntax is also valid TOML basic-string syntax."""
-    return json.dumps(value, ensure_ascii=False)
-
-
 def _write_generated_prompt(path: Path, goal: str, result: CouncilResult) -> None:
-    definition = "\n".join(
-        [
-            'spec_version = "1.0"',
-            "",
-            "[prompt]",
-            "name = %s" % _toml_string(_slug(goal)),
-            "description = %s" % _toml_string("Generated from: " + goal),
-            'used_in = ["prompt-ninja-cli"]',
-            "",
-            "[model]",
-            'provider = "openai"',
-            "name = %s" % _toml_string(result.judge_model or "gpt-5.6-terra"),
-            "",
-            "[template]",
-            "system = %s" % _toml_string(result.final_prompt),
-            'user = "{{input}}"',
-            "",
-            "[[variables]]",
-            'name = "input"',
-            'type = "string"',
-            "required = true",
-            "",
-            "[output]",
-            'format = "text"',
-            "",
-        ]
+    prompt = prompt_from_export_request(
+        PromptExportRequest(
+            final_prompt=result.final_prompt,
+            goal=goal,
+            model=result.judge_model or DEFAULT_MODEL,
+            definition=result.prompt_definition or None,
+        )
     )
-    # Validate before writing so generate never emits an invalid artifact.
-    PromptNinja(tomllib.loads(definition), source=str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(definition, encoding="utf-8")
+    path.write_text(prompt.to_toml(), encoding="utf-8")
 
 
 async def _generate(brief: Brief) -> CouncilResult:
@@ -109,7 +88,7 @@ async def _generate(brief: Brief) -> CouncilResult:
         if isinstance(item, CouncilResult):
             result = item
     if result is None:
-        raise click.ClickException("The prompt council did not return a result.")
+        raise click.ClickException("The Board of Prompts did not return a result.")
     return result
 
 
@@ -125,9 +104,10 @@ def _prompt_path(path: Path | None) -> Path:
 def _openai_executor(prompt: PromptNinja):
     if not os.getenv("OPENAI_API_KEY"):
         raise click.ClickException("OPENAI_API_KEY is required to run LLM prompt tests.")
+    client = OpenAIPromptClient()
 
     async def execute(prepared):
-        return await prompt.execute_openai(prepared)
+        return await client.execute(prompt, prepared)
 
     return execute
 
@@ -215,7 +195,7 @@ def generate(goal: str | None, config_path: Path, output: Path | None) -> None:
         expected_output=str(config.get("expected_output", "")),
         constraints=str(config.get("constraints", "")),
     )
-    destination = output or Path("prompts") / (_slug(resolved_goal) + ".prompt.toml")
+    destination = output or Path("prompts") / prompt_filename(resolved_goal)
     result = asyncio.run(_generate(brief))
     _write_generated_prompt(destination, resolved_goal, result)
     click.echo("Generated %s" % destination)
@@ -223,7 +203,7 @@ def generate(goal: str | None, config_path: Path, output: Path | None) -> None:
 
 @cli.command("test")
 @click.option("--prompt", "prompt_path", type=click.Path(path_type=Path), help="Prompt file to test.")
-@click.option("--judge-model", default="gpt-5.6-terra", show_default=True)
+@click.option("--judge-model", default=DEFAULT_MODEL, show_default=True)
 @click.option("--verbose", "-v", is_flag=True, help="Show model output for passing cases.")
 def test_prompt(prompt_path: Path | None, judge_model: str, verbose: bool) -> None:
     """Run a prompt's embedded examples and score them with an LLM judge."""
@@ -237,7 +217,7 @@ def test_prompt(prompt_path: Path | None, judge_model: str, verbose: bool) -> No
 @cli.command("test-prompts")
 @click.option("--prompts-dir", "-t", type=click.Path(path_type=Path), default=Path("prompts"), show_default=True)
 @click.option("--prompt-name", "-p", help="Run only the prompt with this [prompt].name.")
-@click.option("--judge-model", default="gpt-5.6-terra", show_default=True)
+@click.option("--judge-model", default=DEFAULT_MODEL, show_default=True)
 @click.option("--verbose", "-v", is_flag=True, help="Show model output for passing cases.")
 def test_prompts(prompts_dir: Path, prompt_name: str | None, judge_model: str, verbose: bool) -> None:
     """Run embedded test cases across pipeline prompt TOML files."""
@@ -261,7 +241,7 @@ def test_prompts(prompts_dir: Path, prompt_name: str | None, judge_model: str, v
 @cli.command()
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("feedback")
-@click.option("--model", default="gpt-5.6-terra", show_default=True)
+@click.option("--model", default=DEFAULT_MODEL, show_default=True)
 def update(prompt_file: Path, feedback: str, model: str) -> None:
     """Update a prompt TOML file from natural-language feedback."""
     if not prompt_file.name.endswith(".prompt.toml"):
@@ -275,7 +255,7 @@ def update(prompt_file: Path, feedback: str, model: str) -> None:
 @cli.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--fix", is_flag=True, help="Use the LLM updater to repair invalid prompt files.")
-@click.option("--model", default="gpt-5.6-terra", show_default=True)
+@click.option("--model", default=DEFAULT_MODEL, show_default=True)
 def validate(path: Path, fix: bool, model: str) -> None:
     """Validate one *.prompt.toml file or every such file in a directory."""
     paths = _validation_paths(path)
@@ -293,7 +273,13 @@ def validate(path: Path, fix: bool, model: str) -> None:
             click.echo(click.style("INVALID", fg="red") + " " + str(prompt_file), err=True)
             click.echo(str(exc), err=True)
             if fix:
-                feedback = "Repair every TOML and Prompt Ninja validation error below while preserving the prompt's intent:\n%s" % exc
+                feedback = (
+                    "Repair every TOML and Prompt Ninja validation error below while preserving "
+                    "the prompt's intent. Output must be String, BigInt, or an importable dotted "
+                    "path to a Pydantic BaseModel. If a broken model path cannot be verified, "
+                    "do not invent a path; use String for text output or BigInt for integer output.\n%s"
+                    % exc
+                )
                 try:
                     backup = asyncio.run(_repair_prompt_file(prompt_file, feedback, model))
                     PromptNinja.from_file(prompt_file)

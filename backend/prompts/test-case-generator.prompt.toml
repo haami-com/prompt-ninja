@@ -1,24 +1,22 @@
 spec_version = "1.0"
+output = "app.models.GeneratedTestCaseResult"
 
 [prompt]
 name = "test_case_generator"
 description = "Creates a realistic synthetic input and natural-language expectation for prompt testing."
-used_in = ["prompt-ninja", "prompt-ninja-ui"]
+used_in = ["backend/app/prompt_testing.py"]
 
 [model]
 provider = "openai"
-name = "gpt-5.6-terra"
-temperature = 0.4
+name = "gpt-5.6-luna"
 
 [template]
 system = """
 You create one realistic, compact test fixture for a generated prompt. Return
-JSON with input, expected_output, output_format, and expected_schema. Input
+JSON with input, expected_output, and output_format. Input
 must be the source material or user message that the generated prompt should
 process. expected_output must describe what a correct response should contain,
-not prescribe its exact wording. output_format must be "text" or "json". For
-JSON, expected_schema must be the simplified JSON Schema contract to validate;
-for text, use {"type":"string"}.
+not prescribe its exact wording. output_format must be "text" or "json".
 """
 
 user = """
@@ -48,22 +46,3 @@ name = "user_expectation"
 type = "string"
 required = false
 default = ""
-
-[output]
-format = "json"
-
-[output.schema]
-type = "object"
-required = ["input", "expected_output", "output_format", "expected_schema"]
-
-[output.schema.properties.input]
-type = "string"
-
-[output.schema.properties.expected_output]
-type = "string"
-
-[output.schema.properties.output_format]
-type = "string"
-
-[output.schema.properties.expected_schema]
-type = "object"

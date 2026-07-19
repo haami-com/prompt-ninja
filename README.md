@@ -1,6 +1,10 @@
-# Prompt Council
+# Prompt Ninja · Board of Prompts
 
-Prompt Council is a small FastAPI + static React/Chakra UI app for turning an outcome into a production-ready prompt through a visible multi-agent review.
+Prompt Ninja is a small FastAPI + static React/Chakra UI app for turning a
+free-flow request into a production-ready prompt through a visible Board of
+Prompts review. Users can attach up to five reference files, address them as
+`File #1` through `File #5`, review and edit an LLM-enhanced structured brief,
+and explicitly confirm it before the board starts.
 
 ## Run locally
 
@@ -21,13 +25,40 @@ npm run dev
 
 The frontend is a Vite + React + Chakra UI npm project. `frontend/package-lock.json` and `backend/uv.lock` pin the install graphs for reproducible local runs.
 
-Every council stage—requirements, all three creators, and final synthesis—uses its TOML-defined LLM prompt and requires `OPENAI_API_KEY`; without it, generation reports an error rather than creating local fallback prompts. The FastAPI service is stateless: uploaded files are read in memory and are not persisted.
+The intake enhancer and every board stage—requirements, all three creators,
+final synthesis, and validation—use TOML-defined LLM prompts and require
+`OPENAI_API_KEY`; without it, the API reports an error rather than creating
+local fallback prompts. The FastAPI service is stateless: uploaded files are
+read in memory and are not persisted.
+
+Each board prompt declares its own default model in TOML. The UI starts with
+`OPENAI_DEFAULT_MODEL` selected for each configurable stage and only offers the
+comma-separated models in `OPENAI_ALLOWED_MODELS`; add a model there only after
+confirming that the API project can invoke it. Restart the backend after
+changing either setting.
 
 ## Prompt Ninja prompt specifications
 
-Prompt definitions live in `backend/prompts` and use the `*.prompt.toml` extension. [requirements.prompt.toml](backend/prompts/requirements.prompt.toml), [creator-1.prompt.toml](backend/prompts/creator-1.prompt.toml), [creator-2.prompt.toml](backend/prompts/creator-2.prompt.toml), [creator-3.prompt.toml](backend/prompts/creator-3.prompt.toml), and [judge.prompt.toml](backend/prompts/judge.prompt.toml) now define the council's provider-backed stages. [greeting.prompt.toml](backend/prompts/greeting.prompt.toml) remains a minimal executable example of the `1.0` specification.
+Prompt definitions live in `backend/prompts` and use the `*.prompt.toml` extension. [requirements.prompt.toml](backend/prompts/requirements.prompt.toml), [creator-1.prompt.toml](backend/prompts/creator-1.prompt.toml), [creator-2.prompt.toml](backend/prompts/creator-2.prompt.toml), [creator-3.prompt.toml](backend/prompts/creator-3.prompt.toml), and [judge.prompt.toml](backend/prompts/judge.prompt.toml) define the board's provider-backed stages. [greeting.prompt.toml](backend/prompts/greeting.prompt.toml) remains a minimal executable example of the `1.0` specification.
 
-`PromptNinja` validates a prompt before it reaches a model, renders declared variables, validates JSON output against the simplified schema, and executes embedded tests. Model execution is injected so tests can use a deterministic fake in CI or the application's provider adapter in production.
+`PromptNinja` validates a prompt before it reaches a model, resolves its declared
+Pydantic output class, renders declared variables, and executes embedded tests.
+Structured response validation is performed once by that Pydantic class through
+the OpenAI parser.
+
+Every `prompt.used_in` entry must be a repository-relative consumer file path such as `backend/app/agents.py`, not a package or application name.
+
+The canonical TOML `output` value is `String`, `BigInt`, or a dotted import
+path to a Pydantic `BaseModel`, for example:
+
+```toml
+output = "app.prompt_compiler.CompiledPromptResult"
+```
+
+Prompt Ninja resolves model paths with Python import and attribute lookup, then
+passes the class directly to `responses.parse(text_format=...)`. It reads the
+validated object from `response.output_parsed`; it does not normalize alternate
+model-generated schemas.
 
 ```python
 from app.prompt_ninja import PromptNinja
@@ -65,7 +96,11 @@ prompt-ninja ui --port 8000
 
 `generate` writes a validated `*.prompt.toml` artifact. `test` and `test-prompts` execute embedded test cases using the configured LLM, then score the expected-versus-actual result with an LLM judge; both require `OPENAI_API_KEY`. `update` validates the model's replacement before writing it and keeps a `.bak` copy.
 
-`validate` checks a file or directory of prompt files and prints TOML syntax and Pydantic field-location errors for CI. `validate --fix` uses the LLM updater to repair invalid files, validates the replacement, and preserves each original as a `.bak` file.
+`validate` checks a file or directory of prompt files, imports every declared
+output-model path, verifies that its attribute exists and subclasses Pydantic
+`BaseModel`, and prints actionable errors for CI. `validate --fix` gives those
+errors to the LLM updater, requires a valid replacement output declaration, and
+preserves each original as a `.bak` file.
 
 ### Semantic prompt tests
 
@@ -94,9 +129,9 @@ prompt-ninja test-prompts -p judge
 prompt-ninja test-prompts -t ./prompts -v
 ```
 
-### Runtime controls and auto-fix samples
+### Runtime model overrides and auto-fix samples
 
-`PromptNinja` provides `OpenAIPromptClient` for reusable provider access. Pass `PromptRuntimeOptions` to override model parameters for one run without changing the checked-in TOML. Attach a `SamplingRunHook` to receive matching request and response events for a sampled set of real runs—an ideal input for a queue-backed auto-fix workflow.
+`PromptNinja` uses the OpenAI Responses API through `OpenAIPromptClient`. Pass `PromptRuntimeOptions` to override the model for one run without changing the checked-in TOML. Sampling and output-length controls are left to the selected model. Attach a `SamplingRunHook` to receive matching request and response events for a sampled set of real runs—an ideal input for a queue-backed auto-fix workflow.
 
 ```python
 from app.prompt_ninja import OpenAIPromptClient, PromptNinja, PromptRuntimeOptions, SamplingRunHook
@@ -113,11 +148,11 @@ prepared = prompt.prepare({"input": "Example source"})
 result = await client.execute(
     prompt,
     prepared,
-    runtime=PromptRuntimeOptions(model="gpt-5.6-terra", temperature=0.2),
+    runtime=PromptRuntimeOptions(model="gpt-5.6-sol"),
     hooks=(hook,),
 )
 ```
 
 Because hooks receive real prompt inputs and outputs, redact or encrypt sensitive fields before persisting them. Hook failures are isolated and never fail the model run.
 
-When a stage has an application model, pass it as `output_model` and the client returns that validated Pydantic object instead of an untyped dictionary. Prompt Council uses this for `RequirementsResult`, so malformed requirements fail at the model boundary rather than being normalized later.
+When a stage has an application model, pass it as `output_model` and the client returns that validated Pydantic object instead of an untyped dictionary. The Board of Prompts uses this for `RequirementsResult`, so malformed requirements fail at the model boundary rather than being normalized later.

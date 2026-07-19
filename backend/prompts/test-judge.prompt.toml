@@ -1,14 +1,14 @@
 spec_version = "1.0"
+output = "app.prompt_ninja.TestJudgment"
 
 [prompt]
 name = "test_judge"
 description = "Semantically scores a prompt result against a natural-language expectation."
-used_in = ["prompt-ninja", "prompt-ninja-cli"]
+used_in = ["backend/app/prompt_testing.py"]
 
 [model]
 provider = "openai"
-name = "gpt-5.6-terra"
-temperature = 0
+name = "gpt-5.6-sol"
 
 [template]
 system = """
@@ -35,16 +35,3 @@ required = true
 name = "actual_output"
 type = "string"
 required = true
-
-[output]
-format = "json"
-
-[output.schema]
-type = "object"
-required = ["score", "rationale"]
-
-[output.schema.properties.score]
-type = "number"
-
-[output.schema.properties.rationale]
-type = "string"

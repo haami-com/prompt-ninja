@@ -1,6 +1,3 @@
-from pathlib import Path
-
-
 async def extract_upload(upload) -> str:
     """Extract useful text without persisting the upload."""
     name = (upload.filename or "").lower()
@@ -19,7 +16,4 @@ async def extract_upload(upload) -> str:
         return "\n".join(p.text for p in document.paragraphs if p.text.strip()).strip()
     if name.endswith((".txt", ".md", ".csv")):
         return content.decode("utf-8", errors="replace").strip()
-    if name.endswith((".png", ".jpg", ".jpeg")):
-        return f"[Image source: {Path(upload.filename or 'image').name}. Vision extraction is enabled for configured model runs.]"
-    raise ValueError("Unsupported file type. Use PDF, DOCX, PNG, JPEG, TXT, MD, or CSV.")
-
+    raise ValueError("Unsupported file type. Use PDF, DOCX, TXT, MD, or CSV.")

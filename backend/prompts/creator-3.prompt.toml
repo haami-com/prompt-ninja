@@ -1,15 +1,14 @@
 spec_version = "1.0"
+output = "app.models.CreatorDraftResult"
 
 [prompt]
 name = "creator_3"
 description = "Creates a grounded prompt proposal that prioritizes edge cases."
-used_in = ["prompt-ninja", "prompt-council"]
+used_in = ["backend/app/agents.py"]
 
 [model]
 provider = "openai"
-name = "gpt-5.5"
-temperature = 0.2
-max_output_tokens = 1600
+name = "gpt-5.6-terra"
 
 [template]
 system = """
@@ -22,7 +21,7 @@ user = """
 BRIEF:
 {{brief}}
 
-COUNCIL CONTEXT:
+BOARD CONTEXT:
 {{council_context}}
 """
 
@@ -36,17 +35,4 @@ description = "The user's structured prompt brief."
 name = "council_context"
 type = "object"
 required = true
-description = "Requirements and prior council outputs relevant to this creator."
-
-[output]
-format = "json"
-
-[output.schema]
-type = "object"
-required = ["draft", "rationale"]
-
-[output.schema.properties.draft]
-type = "string"
-
-[output.schema.properties.rationale]
-type = "string"
+description = "Requirements and prior board outputs relevant to this creator."
