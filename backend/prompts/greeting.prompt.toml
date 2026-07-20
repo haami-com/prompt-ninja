@@ -1,18 +1,18 @@
-spec_version = "1.0"
-output = "app.models.GreetingResult"
-
-[prompt]
+[metadata]
+spec_version = "1.2"
 name = "greeting"
 description = "Returns a concise greeting for a named person."
-used_in = ["README.md", "backend/tests/test_prompt_ninja.py"]
+used_by = ["README.md", "backend/tests/test_prompt_ninja.py"]
+version = "1.0.0"
+output = "app.models.GreetingResult"
 
-[model]
-provider = "openai"
-name = "gpt-5.6"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
 
-[template]
+[prompt]
 system = """
-You return a JSON object that follows the requested schema.
+Provide a concise greeting that follows the requested tone.
 """
 
 user = """
@@ -28,12 +28,17 @@ description = "Person to greet."
 [[variables]]
 name = "tone"
 type = "string"
+description = "The desired tone of the greeting."
 required = false
 default = "friendly"
 
 [[tests]]
 name = "friendly greeting"
+variable.name = "Ada"
 expected_output = "A friendly greeting to Ada in a JSON object with a result string."
 
-[tests.input]
-name = "Ada"
+[[tests]]
+name = "formal greeting"
+variable.name = "Dr. Rivera"
+variable.tone = "formal"
+expected_output = "A concise formal greeting for Dr. Rivera in the declared response contract."

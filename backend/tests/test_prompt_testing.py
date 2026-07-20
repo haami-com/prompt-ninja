@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app.models import GeneratedPromptTestRequest
 from app.main import app
+from app.prompt_catalog import PROMPTS
 from app.prompt_testing import PromptTestHarness
 from fastapi.testclient import TestClient
 
@@ -45,6 +46,13 @@ def test_harness_generates_fixture_runs_prompt_and_judges_result():
     )
 
 
+def test_harness_reuses_the_startup_prompt_collection():
+    harness = PromptTestHarness()
+
+    assert harness.fixture_generator is PROMPTS.test_case_generator
+    assert harness.judge is PROMPTS.test_judge
+
+
 def test_harness_executes_the_canonical_definition_with_type_correct_fixture_values():
     class FakeResponses:
         def __init__(self):
@@ -61,23 +69,39 @@ def test_harness_executes_the_canonical_definition_with_type_correct_fixture_val
 
     responses = FakeResponses()
     definition = {
-        "spec_version": "1.0",
-        "prompt": {
+        "metadata": {
+            "spec_version": "1.2",
             "name": "project-summary",
             "description": "Summarizes notes.",
-            "used_in": ["backend/tests/test_prompt_testing.py"],
+            "used_by": ["backend/tests/test_prompt_testing.py"],
+            "version": "1.0.0",
+            "output": "app.prompt_ninja.JsonObjectOutput",
         },
-        "model": {"provider": "openai", "name": "gpt-5.6-sol"},
-        "template": {
+        "llm_model": {"provider": "openrouter", "name": "google/gemini-2.5-flash"},
+        "prompt": {
             "system": "Summarize {{meeting_notes}}.",
             "user": "Limit {{max_items}}. Metadata: {{metadata}}",
         },
         "variables": [
-            {"name": "meeting_notes", "type": "string", "required": True},
-            {"name": "max_items", "type": "integer", "required": True},
-            {"name": "metadata", "type": "object", "required": True},
+            {
+                "name": "meeting_notes",
+                "type": "string",
+                "description": "Notes to summarize.",
+                "required": True,
+            },
+            {
+                "name": "max_items",
+                "type": "integer",
+                "description": "Maximum number of items.",
+                "required": True,
+            },
+            {
+                "name": "metadata",
+                "type": "object",
+                "description": "Supporting metadata.",
+                "required": True,
+            },
         ],
-        "output": "app.prompt_ninja.JsonObjectOutput",
     }
     result = asyncio.run(
         PromptTestHarness(client=SimpleNamespace(responses=responses)).run(
@@ -100,13 +124,13 @@ def test_harness_executes_the_canonical_definition_with_type_correct_fixture_val
 
 
 def test_generated_prompt_test_endpoint_requires_a_configured_provider(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     response = TestClient(app).post(
         "/api/test-generated",
         json={
             "final_prompt": "Translate the user's text to English.",
             "goal": "Translate French text to English",
-            "model": "gpt-5.6-sol",
+            "model": "google/gemini-2.5-flash",
         },
     )
     assert response.status_code == 503

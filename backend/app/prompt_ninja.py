@@ -11,10 +11,13 @@ from __future__ import annotations
 import inspect
 import importlib
 import json
+import keyword
+import os
 import random
 import re
 import tomllib
 import uuid
+from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from collections.abc import Awaitable
 from typing import Any, Callable, Literal, Mapping
@@ -29,9 +32,31 @@ from pydantic import (
     model_validator,
 )
 
-SUPPORTED_SPEC_VERSION = "1.0"
-VariableType = Literal["string", "integer", "number", "boolean", "array", "object"]
-_VARIABLE_PATTERN = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+SUPPORTED_SPEC_VERSION = "1.2"
+_BUILTIN_VARIABLE_TYPES = {
+    "string",
+    "integer",
+    "number",
+    "boolean",
+    "json",
+    "dict",
+    "date",
+    "datetime",
+    "dynamic",
+    # Backwards-compatible aliases for prompt files written before spec 1.2.
+    "array",
+    "object",
+}
+_VARIABLE_TYPE_ALIASES = {
+    "str": "string",
+    "int": "integer",
+    "float": "number",
+    "bool": "boolean",
+}
+_LIST_TYPE_PATTERN = re.compile(r"^list\[(.+)\]$")
+_VARIABLE_PATTERN = re.compile(
+    r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\|\s*([A-Za-z_][A-Za-z0-9_]*))?\s*\}\}"
+)
 _TOML_BARE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -60,6 +85,12 @@ def _toml_key(key: str) -> str:
 
 
 def _toml_value(value: Any) -> str:
+    if isinstance(value, BaseModel):
+        return _toml_value(value.model_dump(mode="json"))
+    if isinstance(value, datetime):
+        return json.dumps(value.isoformat())
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, bool):
@@ -87,9 +118,12 @@ class SpecModel(BaseModel):
 
 
 class PromptMetadata(SpecModel):
+    spec_version: Literal[SUPPORTED_SPEC_VERSION]
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    used_in: list[str] = Field(min_length=1)
+    used_by: list[str] = Field(min_length=1)
+    version: str = Field(min_length=1)
+    output: str
 
     @field_validator("name", "description")
     @classmethod
@@ -98,7 +132,7 @@ class PromptMetadata(SpecModel):
             raise ValueError("must not be blank")
         return value
 
-    @field_validator("used_in")
+    @field_validator("used_by")
     @classmethod
     def non_blank_usage_names(cls, value: list[str]) -> list[str]:
         for item in value:
@@ -112,8 +146,20 @@ class PromptMetadata(SpecModel):
                 raise ValueError("must contain only repository-relative file paths")
         return value
 
+    @field_validator("output")
+    @classmethod
+    def validate_output_declaration(cls, value: str) -> str:
+        if value.casefold() in {"string", "bigint"}:
+            return value
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
+            value,
+        ):
+            raise ValueError("must be String, BigInt, or a dotted Pydantic model path")
+        return value
 
-class ModelConfig(SpecModel):
+
+class LLMModelConfig(SpecModel):
     provider: str = Field(min_length=1)
     name: str = Field(min_length=1)
 
@@ -125,7 +171,7 @@ class ModelConfig(SpecModel):
         return value
 
 
-class TemplateSpec(SpecModel):
+class PromptSpec(SpecModel):
     system: str = ""
     user: str = ""
 
@@ -137,37 +183,219 @@ class TemplateSpec(SpecModel):
 
     @property
     def referenced_variables(self) -> set[str]:
-        return set(_VARIABLE_PATTERN.findall(self.system)) | set(
-            _VARIABLE_PATTERN.findall(self.user)
+        return {
+            match.group(1)
+            for template in (self.system, self.user)
+            for match in _VARIABLE_PATTERN.finditer(template)
+        }
+
+
+def _resolve_variable_model(declaration: str) -> type[BaseModel] | None:
+    """Resolve a dotted variable declaration only when it names a Pydantic model."""
+    if "." not in declaration:
+        return None
+    try:
+        module_name, attribute_name = declaration.rsplit(".", 1)
+        model = getattr(importlib.import_module(module_name), attribute_name)
+    except (ImportError, AttributeError, ValueError) as exc:
+        raise ValueError(
+            "Pydantic model %r could not be imported" % declaration
+        ) from exc
+    if (
+        not isinstance(model, type)
+        or not issubclass(model, BaseModel)
+        or model is BaseModel
+    ):
+        raise ValueError(
+            "Pydantic model %r must resolve to a BaseModel class" % declaration
         )
+    return model
+
+
+def _json_ready(value: Any) -> Any:
+    """Make supported runtime values safe for deterministic JSON rendering."""
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise ValueError("%s is not JSON serializable" % type(value).__name__)
+
+
+def _format_json(value: Any) -> str:
+    return json.dumps(_json_ready(value), ensure_ascii=False)
 
 
 class VariableSpec(SpecModel):
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    type: VariableType
+    type: str = Field(min_length=1)
     required: bool
-    description: str | None = None
+    description: str = Field(min_length=1)
     default: Any = None
 
     @property
     def has_default(self) -> bool:
         return "default" in self.model_fields_set
 
+    @field_validator("type")
+    @classmethod
+    def declared_type_is_supported(cls, value: str) -> str:
+        value = _VARIABLE_TYPE_ALIASES.get(value, value)
+        if value in _BUILTIN_VARIABLE_TYPES:
+            return value
+        nested = _LIST_TYPE_PATTERN.fullmatch(value)
+        if nested:
+            item_type = _VARIABLE_TYPE_ALIASES.get(nested.group(1), nested.group(1))
+            if not item_type or item_type == value:
+                raise ValueError(
+                    "list type must name an item type, for example list[string]"
+                )
+            canonical_item_type = cls.declared_type_is_supported(item_type)
+            return "list[%s]" % canonical_item_type
+        model = _resolve_variable_model(value)
+        if model is None:
+            raise ValueError(
+                "must be a supported built-in type, list[TYPE], or dotted Pydantic model path"
+            )
+        return value
+
+    @property
+    def model_class(self) -> type[BaseModel] | None:
+        return _resolve_variable_model(self.type)
+
+    @property
+    def list_item_type(self) -> str | None:
+        match = _LIST_TYPE_PATTERN.fullmatch(self.type)
+        return match.group(1) if match else None
+
+    def _coerce(self, declaration: str, value: Any) -> Any:
+        if declaration == "dynamic":
+            return value
+        if declaration in {"json", "object"}:
+            _json_ready(value)
+            return value
+        if declaration == "dict":
+            if not isinstance(value, dict):
+                raise ValueError("must be a dict")
+            return value
+        if declaration == "array":
+            if not isinstance(value, list):
+                raise ValueError("must be a list")
+            return value
+        nested = _LIST_TYPE_PATTERN.fullmatch(declaration)
+        if nested:
+            if not isinstance(value, list):
+                raise ValueError("must be a list")
+            return [self._coerce(nested.group(1), item) for item in value]
+        if declaration == "string":
+            if not isinstance(value, str):
+                raise ValueError("must be a string")
+            return value
+        if declaration == "integer":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("must be an integer")
+            return value
+        if declaration == "number":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("must be a number")
+            return value
+        if declaration == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError("must be a boolean")
+            return value
+        if declaration == "date":
+            if isinstance(value, datetime):
+                raise ValueError("must be a date, not a datetime")
+            if isinstance(value, date):
+                return value
+            if isinstance(value, str):
+                try:
+                    return date.fromisoformat(value)
+                except ValueError as exc:
+                    raise ValueError("must be an ISO 8601 date") from exc
+            raise ValueError("must be a date or ISO 8601 date string")
+        if declaration == "datetime":
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value)
+                except ValueError as exc:
+                    raise ValueError("must be an ISO 8601 datetime") from exc
+            raise ValueError("must be a datetime or ISO 8601 datetime string")
+        model = _resolve_variable_model(declaration)
+        if isinstance(value, model):
+            return value
+        try:
+            return model.model_validate(value)
+        except ValidationError as exc:
+            raise ValueError(
+                "model validation failed: %s" % exc.errors(include_url=False)
+            ) from exc
+
+    def coerce(self, value: Any) -> Any:
+        """Validate and normalize a runtime value before it reaches a template."""
+        return self._coerce(self.type, value)
+
     def accepts(self, value: Any) -> bool:
-        checks = {
-            "string": isinstance(value, str),
-            "integer": isinstance(value, int) and not isinstance(value, bool),
-            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
-            "boolean": isinstance(value, bool),
-            "array": isinstance(value, list),
-            "object": isinstance(value, dict),
-        }
-        return checks[self.type]
+        try:
+            self.coerce(value)
+        except ValueError:
+            return False
+        return True
+
+    def render(self, value: Any, filter_name: str | None = None) -> str:
+        if filter_name == "str":
+            return str(value)
+        if filter_name == "repr":
+            return repr(value)
+        if filter_name == "json":
+            try:
+                return _format_json(value)
+            except ValueError as exc:
+                raise PromptRenderError(
+                    "Variable %r cannot be rendered with the json filter: %s"
+                    % (self.name, exc)
+                ) from exc
+        if filter_name == "csv":
+            if not isinstance(value, list):
+                raise PromptRenderError(
+                    "Variable %r uses the csv filter but its value is %s, not a list."
+                    % (self.name, type(value).__name__)
+                )
+            return ", ".join(str(item) for item in value)
+        if filter_name is not None:
+            raise PromptRenderError(
+                "Variable %r uses unsupported template filter %r."
+                % (self.name, filter_name)
+            )
+        if self.type in {"json", "dict", "object"}:
+            try:
+                return _format_json(value)
+            except ValueError as exc:
+                raise PromptRenderError(
+                    "Variable %r cannot be rendered as JSON: %s" % (self.name, exc)
+                ) from exc
+        if self.list_item_type is not None or self.type == "array":
+            return ", ".join(str(item) for item in value)
+        if self.model_class is not None:
+            return repr(value)
+        return str(value)
 
     @model_validator(mode="after")
     def default_matches_type(self) -> "VariableSpec":
-        if self.has_default and not self.accepts(self.default):
-            raise ValueError("default must have type %s" % self.type)
+        if self.has_default:
+            try:
+                self.default = self.coerce(self.default)
+            except ValueError as exc:
+                raise ValueError(
+                    "default must have type %s: %s" % (self.type, exc)
+                ) from exc
         return self
 
 
@@ -181,10 +409,8 @@ class JsonObjectOutput(RootModel[dict[str, Any]]):
 
 class PromptTestCase(SpecModel):
     name: str | None = Field(default=None, min_length=1)
-    input: dict[str, Any]
-    expected_output: str | None = None
-    # Kept for existing prompt files; prefer expected_output for semantic LLM judging.
-    expected: dict[str, Any] | None = None
+    variable: dict[str, Any]
+    expected_output: str = Field(min_length=1)
 
     @field_validator("name")
     @classmethod
@@ -195,13 +421,10 @@ class PromptTestCase(SpecModel):
             raise ValueError("must not be blank")
         return value
 
-    @model_validator(mode="after")
-    def has_an_expectation(self) -> "PromptTestCase":
-        if self.expected_output is None and self.expected is None:
-            raise ValueError("must define expected_output or expected")
-        if self.expected_output is not None and not self.expected_output.strip():
-            raise ValueError("expected_output must not be blank")
-        return self
+    @property
+    def input(self) -> dict[str, Any]:
+        """Runtime test values retained for the execution API."""
+        return self.variable
 
 
 class TestingSpec(SpecModel):
@@ -209,32 +432,37 @@ class TestingSpec(SpecModel):
 
 
 class PromptFileSpec(SpecModel):
-    """Typed representation of the Prompt Ninja 1.0 TOML document."""
+    """Typed representation of the human-readable Prompt Ninja TOML document."""
 
-    spec_version: Literal[SUPPORTED_SPEC_VERSION]
-    prompt: PromptMetadata
-    model: ModelConfig
-    template: TemplateSpec
+    metadata: PromptMetadata
+    llm_model: LLMModelConfig
+    prompt: PromptSpec
     variables: list[VariableSpec] = Field(default_factory=list)
-    output: str
     testing: TestingSpec = Field(default_factory=TestingSpec)
     tests: list[PromptTestCase] = Field(default_factory=list)
 
     @property
+    def spec_version(self) -> str:
+        return self.metadata.spec_version
+
+    @property
+    def model(self) -> LLMModelConfig:
+        """Compatibility view for the runtime's model resolution."""
+        return self.llm_model
+
+    @property
+    def template(self) -> PromptSpec:
+        """Compatibility view for template rendering."""
+        return self.prompt
+
+    @property
+    def output(self) -> str:
+        """Compatibility view for output validation."""
+        return self.metadata.output
+
+    @property
     def variables_by_name(self) -> dict[str, VariableSpec]:
         return {variable.name: variable for variable in self.variables}
-
-    @field_validator("output")
-    @classmethod
-    def validate_output_declaration(cls, value: str) -> str:
-        if value.casefold() in {"string", "bigint"}:
-            return value
-        if not re.fullmatch(
-            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
-            value,
-        ):
-            raise ValueError("must be String, BigInt, or a dotted Pydantic model path")
-        return value
 
     @model_validator(mode="after")
     def validate_cross_field_rules(self) -> "PromptFileSpec":
@@ -258,18 +486,26 @@ class PromptFileSpec(SpecModel):
                 % ", ".join(missing_required)
             )
         for test in self.tests:
-            unknown = sorted(set(test.input) - set(variables))
+            unknown = sorted(set(test.variable) - set(variables))
             if unknown:
                 raise ValueError(
                     "test %r uses undeclared variables: %s"
                     % (test.name, ", ".join(unknown))
                 )
-            for name, value in test.input.items():
-                if not variables[name].accepts(value):
+            for name, value in test.variable.items():
+                try:
+                    test.variable[name] = variables[name].coerce(value)
+                except ValueError as exc:
                     raise ValueError(
-                        "test %r input %r must have type %s"
-                        % (test.name, name, variables[name].type)
-                    )
+                        "test %r variable %r expects %s; received %s: %s"
+                        % (
+                            test.name,
+                            name,
+                            variables[name].type,
+                            type(value).__name__,
+                            exc,
+                        )
+                    ) from exc
         return self
 
 
@@ -308,14 +544,19 @@ class PromptRunEvent(RuntimeModel):
 
 
 class TestJudgment(RuntimeModel):
-    score: float = Field(ge=0, le=1)
-    rationale: str = Field(min_length=1)
+    score: float = Field(
+        ge=0, le=1, description="Semantic correctness score from 0.0 to 1.0."
+    )
+    rationale: str = Field(
+        min_length=1, description="Brief explanation supporting the score."
+    )
 
 
 class PromptTestResult(RuntimeModel):
     name: str
     passed: bool
     expected: dict[str, Any] | str
+    input: dict[str, Any] | None = None
     actual: Any = None
     score: float | None = None
     rationale: str | None = None
@@ -334,6 +575,8 @@ class PromptTestReport(RuntimeModel):
 PromptExecutor = Callable[[PreparedPrompt], Any]
 AsyncPromptExecutor = Callable[[PreparedPrompt], Awaitable[Any]]
 AsyncTestJudge = Callable[[PromptTestCase, Any], Awaitable[dict[str, Any]]]
+PromptTestCaseCallback = Callable[[PromptTestCase], Any]
+PromptTestResultCallback = Callable[[PromptTestResult], Any]
 PromptRunHook = Callable[[PromptRunEvent], Any]
 
 
@@ -386,6 +629,33 @@ def _output_json_schema(
     return output_model.model_json_schema() if output_model else {"type": "object"}
 
 
+def _output_instruction(
+    declaration: str,
+    output_model: type[BaseModel] | None,
+) -> str:
+    """Turn metadata.output into the instruction every model invocation receives."""
+    output_type = _output_format(declaration)
+    if output_type == "text":
+        return (
+            "Output contract (metadata.output = %r): return plain text only."
+            % declaration
+        )
+    if output_type == "integer":
+        return (
+            "Output contract (metadata.output = %r): return one JSON integer only."
+            % declaration
+        )
+    schema = json.dumps(
+        _output_json_schema(declaration, output_model),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return (
+        "Output contract (metadata.output = %r): return only a JSON object that "
+        "validates against this schema:\n%s" % (declaration, schema)
+    )
+
+
 def _validate_output(
     declaration: str,
     output_model: type[BaseModel] | None,
@@ -409,19 +679,18 @@ def _validate_output(
     raise PromptOutputError("Structured output requires a Pydantic model.")
 
 
-def _render_template(template: str, values: Mapping[str, Any]) -> str:
+def _render_template(
+    template: str,
+    values: Mapping[str, Any],
+    variables: Mapping[str, VariableSpec],
+) -> str:
     def replace(match: re.Match[str]) -> str:
         name = match.group(1)
         if name not in values:
             raise PromptRenderError(
                 "No value was provided for template variable %r." % name
             )
-        value = values[name]
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, ensure_ascii=False)
-        if isinstance(value, bool):
-            return str(value).lower()
-        return str(value)
+        return variables[name].render(values[name], match.group(2))
 
     return _VARIABLE_PATTERN.sub(replace, template)
 
@@ -430,6 +699,7 @@ def _prepare_prompt(
     spec: PromptFileSpec,
     values: Mapping[str, Any],
     system_override: str | None,
+    output_model: type[BaseModel] | None,
 ) -> PreparedPrompt:
     if not isinstance(values, Mapping):
         raise PromptRenderError(
@@ -446,25 +716,42 @@ def _prepare_prompt(
         if name not in resolved and variable.has_default:
             resolved[name] = variable.default
         if name not in resolved and variable.required:
-            raise PromptRenderError("Required variable %r was not provided." % name)
-        if name in resolved and not variable.accepts(resolved[name]):
             raise PromptRenderError(
-                "Variable %r must have type %s." % (name, variable.type)
+                "Required variable %r (type %s) was not provided. "
+                "Supply it at runtime or declare a default." % (name, variable.type)
             )
+        if name in resolved:
+            received = resolved[name]
+            try:
+                resolved[name] = variable.coerce(received)
+            except ValueError as exc:
+                raise PromptRenderError(
+                    "Variable %r expects %s; received %s: %s"
+                    % (name, variable.type, type(received).__name__, exc)
+                ) from exc
+
+    rendered_system = _render_template(
+        (
+            system_override
+            if system_override and system_override.strip()
+            else spec.template.system
+        ),
+        resolved,
+        variables,
+    )
+    output_instruction = _output_instruction(spec.output, output_model)
+    system = (
+        "%s\n\n%s" % (rendered_system.rstrip(), output_instruction)
+        if rendered_system.strip()
+        else output_instruction
+    )
 
     return PreparedPrompt(
-        name=spec.prompt.name,
+        name=spec.metadata.name,
         provider=spec.model.provider,
         model=spec.model.name,
-        system=_render_template(
-            (
-                system_override
-                if system_override and system_override.strip()
-                else spec.template.system
-            ),
-            resolved,
-        ),
-        user=_render_template(spec.template.user, resolved),
+        system=system,
+        user=_render_template(spec.template.user, resolved, variables),
     )
 
 
@@ -502,24 +789,11 @@ def _run_prompt_tests(
     results: list[PromptTestResult] = []
     for index, test in enumerate(prompt.tests, start=1):
         name = test.name or "test %d" % index
-        expected = test.expected_output or test.expected or {}
+        expected = test.expected_output
         try:
-            if test.expected is None:
-                raise PromptNinjaError(
-                    "Test %r uses expected_output and requires an async LLM judge."
-                    % name
-                )
-            actual = prompt.run(test.input, executor)
-            if not _contains_expected(actual, test.expected):
-                raise PromptOutputError("Output did not contain the expected values.")
-            results.append(
-                PromptTestResult(
-                    name=name,
-                    passed=True,
-                    expected=expected,
-                    actual=actual,
-                    score=1.0,
-                )
+            raise PromptNinjaError(
+                "Test %r has semantic expected_output and requires an async LLM judge."
+                % name
             )
         except Exception as exc:  # A report should include every failing case.
             results.append(
@@ -527,6 +801,7 @@ def _run_prompt_tests(
                     name=name,
                     passed=False,
                     expected=expected,
+                    input=test.input,
                     error=str(exc),
                 )
             )
@@ -537,50 +812,46 @@ async def _run_prompt_tests_async(
     prompt: "PromptNinja",
     executor: AsyncPromptExecutor,
     judge: AsyncTestJudge | None,
+    on_start: PromptTestCaseCallback | None = None,
+    on_result: PromptTestResultCallback | None = None,
 ) -> PromptTestReport:
     results: list[PromptTestResult] = []
     for index, test in enumerate(prompt.tests, start=1):
         name = test.name or "test %d" % index
-        expected = test.expected_output or test.expected or {}
+        expected = test.expected_output
+        if on_start is not None:
+            callback_result = on_start(test)
+            if inspect.isawaitable(callback_result):
+                await callback_result
         try:
             actual = await prompt.arun(test.input, executor)
-            if test.expected_output is not None:
-                if judge is None:
-                    raise PromptNinjaError(
-                        "Test %r uses expected_output and requires an LLM judge." % name
-                    )
-                verdict = TestJudgment.model_validate(await judge(test, actual))
-                results.append(
-                    PromptTestResult(
-                        name=name,
-                        passed=verdict.score >= prompt.spec.testing.pass_threshold,
-                        expected=expected,
-                        actual=actual,
-                        score=verdict.score,
-                        rationale=verdict.rationale,
-                    )
+            if judge is None:
+                raise PromptNinjaError(
+                    "Test %r uses expected_output and requires an LLM judge." % name
                 )
-            elif not _contains_expected(actual, test.expected):
-                raise PromptOutputError("Output did not contain the expected values.")
-            else:
-                results.append(
-                    PromptTestResult(
-                        name=name,
-                        passed=True,
-                        expected=expected,
-                        actual=actual,
-                        score=1.0,
-                    )
-                )
-        except Exception as exc:  # A report should include every failing case.
-            results.append(
-                PromptTestResult(
-                    name=name,
-                    passed=False,
-                    expected=expected,
-                    error=str(exc),
-                )
+            verdict = TestJudgment.model_validate(await judge(test, actual))
+            result = PromptTestResult(
+                name=name,
+                passed=verdict.score >= prompt.spec.testing.pass_threshold,
+                expected=expected,
+                input=test.input,
+                actual=actual,
+                score=verdict.score,
+                rationale=verdict.rationale,
             )
+        except Exception as exc:  # A report should include every failing case.
+            result = PromptTestResult(
+                name=name,
+                passed=False,
+                expected=expected,
+                input=test.input,
+                error=str(exc),
+            )
+        results.append(result)
+        if on_result is not None:
+            callback_result = on_result(result)
+            if inspect.isawaitable(callback_result):
+                await callback_result
     return PromptTestReport(prompt_name=prompt.name, results=tuple(results))
 
 
@@ -612,11 +883,23 @@ class SamplingRunHook:
             self._sampled_runs.discard(event.run_id)
 
 
-class OpenAIPromptClient:
-    """OpenAI-backed Prompt Ninja client with runtime controls and run hooks."""
+class OpenRouterPromptClient:
+    """OpenRouter-backed Prompt Ninja client with runtime controls and run hooks."""
 
     def __init__(self, client: Any | None = None):
         self.client = client
+        self._owns_client = client is None
+
+    async def aclose(self) -> None:
+        """Close the internally created OpenAI client before its event loop exits."""
+        if not self._owns_client or self.client is None:
+            return
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        self.client = None
 
     async def execute(
         self,
@@ -627,21 +910,28 @@ class OpenAIPromptClient:
         output_model: type[BaseModel] | None = None,
         hooks: tuple[PromptRunHook, ...] = (),
     ) -> Any:
-        if prepared.provider != "openai":
+        if prepared.provider != "openrouter":
             raise PromptNinjaError(
-                "OpenAI execution requires model.provider = 'openai'."
+                "OpenRouter execution requires model.provider = 'openrouter'."
             )
         if self.client is None:
             from openai import AsyncOpenAI
+            from .model_config import OPENROUTER_BASE_URL, openrouter_headers
 
-            self.client = AsyncOpenAI()
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if not api_key:
+                raise PromptNinjaError("OPENROUTER_API_KEY is required to run prompts.")
+            headers = openrouter_headers()
+            headers.pop("Authorization", None)
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=OPENROUTER_BASE_URL,
+                default_headers=headers,
+            )
         options = runtime or PromptRuntimeOptions()
         model = options.model or prepared.model
         instructions = prepared.system
         input_text = prepared.user
-        if prompt.output_format == "json":
-            instructions = f"{instructions.rstrip()}\n\nReturn a valid JSON object."
-            input_text = f"{input_text.rstrip()}\n\nReturn a valid JSON object."
         run_id = str(uuid.uuid4())
         event_data = {
             "run_id": run_id,
@@ -662,7 +952,7 @@ class OpenAIPromptClient:
             responses_api = getattr(self.client, "responses", None)
             if responses_api is None:
                 raise PromptNinjaError(
-                    "The configured OpenAI client does not support the Responses API. "
+                    "The configured OpenRouter client does not support the Responses API. "
                     "Run `uv sync` from the backend directory and restart the service "
                     "to install the pinned openai SDK."
                 )
@@ -737,19 +1027,49 @@ class PromptNinja:
         return cls(definition, source=str(prompt_path))
 
     def to_toml(self) -> str:
-        """Serialize this validated prompt definition as a TOML document."""
+        """Serialize this validated prompt definition using readable TOML tables."""
         definition = self.spec.model_dump(by_alias=True, exclude_none=True)
-        return (
-            "\n".join(
+
+        def table(name: str, values: Mapping[str, Any]) -> list[str]:
+            return [
+                f"[{name}]",
+                *[
+                    "%s = %s" % (_toml_key(key), _toml_value(value))
+                    for key, value in values.items()
+                ],
+            ]
+
+        lines = [
+            *table("metadata", definition["metadata"]),
+            "",
+            *table("llm_model", definition["llm_model"]),
+            "",
+            *table("prompt", definition["prompt"]),
+        ]
+        for variable in definition["variables"]:
+            lines.extend(["", "[[variables]]"])
+            lines.extend(
                 "%s = %s" % (_toml_key(key), _toml_value(value))
-                for key, value in definition.items()
+                for key, value in variable.items()
             )
-            + "\n"
-        )
+        if testing := definition.get("testing"):
+            lines.extend(["", *table("testing", testing)])
+        for test in definition["tests"]:
+            lines.extend(["", "[[tests]]"])
+            lines.extend(
+                "%s = %s" % (_toml_key(key), _toml_value(value))
+                for key, value in test.items()
+                if key != "variable"
+            )
+            lines.extend(
+                "variable.%s = %s" % (_toml_key(key), _toml_value(value))
+                for key, value in test["variable"].items()
+            )
+        return "\n".join(lines) + "\n"
 
     @property
     def name(self) -> str:
-        return self.spec.prompt.name
+        return self.spec.metadata.name
 
     @property
     def tests(self) -> list[PromptTestCase]:
@@ -780,7 +1100,12 @@ class PromptNinja:
         self, values: Mapping[str, Any], system_override: str | None = None
     ) -> PreparedPrompt:
         """Validate variables and render system/user message templates."""
-        return _prepare_prompt(self.spec, values, system_override)
+        return _prepare_prompt(
+            self.spec,
+            values,
+            system_override,
+            self.output_model,
+        )
 
     def run(self, values: Mapping[str, Any], executor: PromptExecutor) -> Any:
         """Prepare the prompt, execute it through ``executor``, and validate its output."""
@@ -805,12 +1130,16 @@ class PromptNinja:
         return self.validate_output(await executor(self.prepare(values)))
 
     async def arun_tests(
-        self, executor: AsyncPromptExecutor, judge: AsyncTestJudge | None = None
+        self,
+        executor: AsyncPromptExecutor,
+        judge: AsyncTestJudge | None = None,
+        on_start: PromptTestCaseCallback | None = None,
+        on_result: PromptTestResultCallback | None = None,
     ) -> PromptTestReport:
-        """Run embedded tests, using ``judge`` for natural-language expectations."""
-        return await _run_prompt_tests_async(self, executor, judge)
+        """Run embedded tests and optionally notify after every completed case."""
+        return await _run_prompt_tests_async(self, executor, judge, on_start, on_result)
 
-    async def run_openai(
+    async def run_openrouter(
         self,
         values: Mapping[str, Any],
         *,
@@ -821,19 +1150,102 @@ class PromptNinja:
         output_model: type[BaseModel] | None = None,
         hooks: tuple[PromptRunHook, ...] = (),
     ) -> Any:
-        """Render, execute, parse, and validate an OpenAI-backed prompt file."""
+        """Render, execute, parse, and validate an OpenRouter-backed prompt file."""
         prepared = self.prepare(values, system_override=system_override)
         options = runtime or PromptRuntimeOptions()
         if model is not None:
             options = options.model_copy(update={"model": model})
-        return await OpenAIPromptClient(client).execute(
-            self,
-            prepared,
-            runtime=options,
-            output_model=output_model,
-            hooks=hooks,
-        )
+        prompt_client = OpenRouterPromptClient(client)
+        try:
+            return await prompt_client.execute(
+                self,
+                prepared,
+                runtime=options,
+                output_model=output_model,
+                hooks=hooks,
+            )
+        finally:
+            await prompt_client.aclose()
 
     def validate_output(self, output: Any) -> Any:
         """Parse and validate a provider response against the output declaration."""
         return _validate_output(self.spec.output, self.output_model, output)
+
+
+class PromptCollection(Mapping[str, PromptNinja]):
+    """An eagerly loaded view of all ``*.prompt.toml`` files in a directory.
+
+    Exact metadata names are available by index; dot access uses a Python-safe
+    alias, replacing separators such as ``-`` with ``_``.
+    """
+
+    def __init__(self, dir: str | Path):
+        self.directory = Path(dir)
+        if not self.directory.is_dir():
+            raise PromptNinjaError(
+                "Prompt collection directory %s does not exist or is not a directory."
+                % self.directory
+            )
+        paths = sorted(self.directory.glob("*.prompt.toml"))
+        if not paths:
+            raise PromptNinjaError(
+                "No *.prompt.toml files found in %s." % self.directory
+            )
+        prompts = [PromptNinja.from_file(path) for path in paths]
+        by_name = {prompt.name: prompt for prompt in prompts}
+        if len(by_name) != len(prompts):
+            raise PromptValidationError(
+                "Prompt collection %s contains duplicate metadata.name values."
+                % self.directory
+            )
+        aliases: dict[str, PromptNinja] = {}
+        for prompt in prompts:
+            alias = self._attribute_alias(prompt.name)
+            if alias is None:
+                continue
+            if hasattr(type(self), alias):
+                raise PromptValidationError(
+                    "Prompt name %r cannot use dot-access alias %r because it is reserved "
+                    "by PromptCollection." % (prompt.name, alias)
+                )
+            existing = aliases.get(alias)
+            if existing is not None:
+                raise PromptValidationError(
+                    "Prompt names %r and %r share dot-access alias %r."
+                    % (existing.name, prompt.name, alias)
+                )
+            aliases[alias] = prompt
+        self._by_name = by_name
+        self._aliases = aliases
+
+    @staticmethod
+    def _attribute_alias(name: str) -> str | None:
+        alias = re.sub(r"[^A-Za-z0-9_]", "_", name)
+        if not alias or not alias.isidentifier() or keyword.iskeyword(alias):
+            return None
+        return alias
+
+    def __getitem__(self, name: str) -> PromptNinja:
+        return self._by_name[name]
+
+    def __iter__(self):
+        return iter(self._by_name)
+
+    def __len__(self) -> int:
+        return len(self._by_name)
+
+    def __getattr__(self, name: str) -> PromptNinja:
+        try:
+            return self._aliases[name]
+        except KeyError as exc:
+            raise AttributeError(
+                "PromptCollection has no prompt alias %r." % name
+            ) from exc
+
+    def __dir__(self) -> list[str]:
+        return sorted(set(super().__dir__()) | set(self._aliases))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Exact metadata names in deterministic filename order."""
+        return tuple(self._by_name)

@@ -1,63 +1,45 @@
-spec_version = "1.0"
-output = "app.prompt_compiler.CompiledPromptResult"
-
-[prompt]
+[metadata]
+spec_version = "1.2"
 name = "prompt_compiler"
 description = "Compiles a tested prompt proposal into a complete Prompt Ninja definition."
-used_in = ["backend/app/agents.py"]
+used_by = ["backend/app/agents.py"]
+version = "1.0.0"
+output = "app.prompt_compiler.CompiledPromptResult"
 
-[model]
-provider = "openai"
-name = "gpt-5.6-sol"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
 
-[template]
+[prompt]
 system = """
-You compile a tested prompt proposal into a complete Prompt Ninja 1.0 definition.
-Return JSON with exactly one key, definition. definition must contain
-spec_version, prompt, model, template, variables, output, testing, and tests.
+You compile a tested prompt proposal into a complete Prompt Ninja 1.2 definition.
 Include at least one embedded test derived from the supplied evidence. Declare every
 template placeholder used in either template, with the correct Prompt Ninja type,
 required flag, and any safe default. Preserve the proposal's intent while using
-the test evidence to make the prompt executable. Use provider "openai" and the
-requested model. Do not return TOML or Markdown; return only the JSON object.
-prompt.used_in must contain repository-relative consumer file paths with a file
+the test evidence to make the prompt executable. Use provider "openrouter" and the
+requested model.
+Optional variables do not need a default. Include a default only when the
+template truly needs a fallback and its TOML value exactly matches the declared
+type. Never emit default = null. For example, a string default must be a quoted
+string, list[string] must receive an array of strings, and dict/json must receive
+JSON-compatible objects; otherwise omit the default field entirely.
+metadata.used_by must contain repository-relative consumer file paths with a file
 extension, never package or application names. Use ["src/prompt_consumer.py"]
 when no concrete consumer path is available.
-
-Use only this canonical field structure:
-{
-  "definition": {
-    "spec_version": "1.0",
-    "prompt": {
-      "name": "prompt-name",
-      "description": "What it does.",
-      "used_in": ["src/prompt_consumer.py"]
-    },
-    "model": {"provider": "openai", "name": "the requested model"},
-    "template": {
-      "system": "Instructions using the declared input placeholder.",
-      "user": "The declared input placeholder."
-    },
-    "variables": [
-      {"name": "input", "type": "string", "required": true}
-    ],
-    "output": "String",
-    "testing": {"pass_threshold": 0.95},
-    "tests": [
-      {
-        "name": "descriptive test name",
-        "input": {"input": "representative input"},
-        "expected_output": "A natural-language description of success."
-      }
-    ]
-  }
-}
-
-variables MUST be a JSON array, never an object keyed by variable name.
-output MUST be exactly "String", "BigInt", or the dotted import path of an
-existing Pydantic BaseModel. Never invent a model path.
-testing may contain only pass_threshold.
-Every test MUST use input, never variables, for its runtime values.
+For metadata.output, use "String" unless the request explicitly requires
+structured JSON, in which case use "app.prompt_ninja.JsonObjectOutput". Use
+"BigInt" only for one integer. Do not invent a dotted Pydantic model path; use
+another dotted path only when it appears verbatim in the supplied requirements
+or candidate prompt.
+Variable type MUST be one of string/str, integer/int, number/float,
+boolean/bool, json, dict, date, datetime, dynamic, list[TYPE], or a real dotted
+Pydantic BaseModel path.
+Use array and object only when preserving a legacy definition. For Pydantic input
+tests, put the model fields in the variable value as a JSON object; never write
+executable Python such as Person(...). Templates may use the str, repr, json,
+or csv rendering filters when a rendering format is important.
+Every test must provide runtime values and natural-language semantic success
+criteria. Never invent a Pydantic model path.
 """
 
 user = """
@@ -80,24 +62,47 @@ SELF-TEST EVIDENCE:
 [[variables]]
 name = "goal"
 type = "string"
+description = "The user goal the compiled prompt must address."
 required = true
 
 [[variables]]
 name = "model"
 type = "string"
+description = "The OpenRouter model requested for the generated prompt."
 required = true
 
 [[variables]]
 name = "requirements"
-type = "object"
+type = "dict"
+description = "The requirements analysis for the prompt."
 required = true
 
 [[variables]]
 name = "candidate_prompt"
 type = "string"
+description = "The selected candidate prompt to compile."
 required = true
 
 [[variables]]
 name = "test_result"
-type = "object"
+type = "dict"
+description = "Evidence from the generated prompt self-test."
 required = true
+
+[[tests]]
+name = "compiles a tested summarization prompt"
+variable.goal = "Summarize weekly project updates"
+variable.model = "google/gemini-2.5-flash"
+variable.requirements = { output_contract = "Three concise bullets", constraints = "Do not invent facts" }
+variable.candidate_prompt = "Summarize the supplied update into three factual bullets."
+variable.test_result = { passed = true, score = 0.98 }
+expected_output = "Produces a complete Prompt Ninja 1.2 definition with declared variables and a meaningful embedded semantic test."
+
+[[tests]]
+name = "preserves typed input requirements"
+variable.goal = "Draft a reply using a customer record"
+variable.model = "google/gemini-2.5-flash"
+variable.requirements = { output_contract = "A professional reply", inputs = "customer record" }
+variable.candidate_prompt = "Use {{customer}} to draft a professional reply."
+variable.test_result = { passed = true, score = 0.96 }
+expected_output = "Produces a valid definition that declares the customer placeholder and uses a testable semantic expectation."

@@ -3,57 +3,32 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import click
+from pydantic import BaseModel
+from rich.console import Console
+from rich.progress import Progress
+from rich.table import Table
+from rich.text import Text
 
 from .agents import PromptCouncil
 from .model_config import DEFAULT_MODEL
 from .models import Brief, CouncilResult, PromptExportRequest
+from .prompt_catalog import PROMPTS
 from .prompt_export import prompt_filename, prompt_from_export_request
 from .prompt_ninja import (
-    OpenAIPromptClient,
+    OpenRouterPromptClient,
+    PromptCollection,
     PromptNinja,
     PromptNinjaError,
+    PromptRuntimeOptions,
     PromptTestReport,
-)
-
-TEST_JUDGE_PROMPT_FILE = (
-    Path(__file__).resolve().parents[1] / "prompts" / "test-judge.prompt.toml"
-)
-
-UPDATE_PROMPT = PromptNinja(
-    {
-        "spec_version": "1.0",
-        "prompt": {
-            "name": "prompt_updater",
-            "description": "Updates a Prompt Ninja TOML file from concise feedback.",
-            "used_in": ["backend/app/cli.py"],
-        },
-        "model": {"provider": "openai", "name": DEFAULT_MODEL},
-        "template": {
-            "system": (
-                "You update Prompt Ninja prompt files. Apply the feedback to the TOML prompt file. "
-                "Return only a complete, valid *.prompt.toml document; do not use Markdown fences. "
-                'Preserve spec_version = "1.0" and every required section. '
-                "The top-level output value must be String, BigInt, or a dotted path to an "
-                "existing importable Pydantic BaseModel class. When feedback says an output "
-                "model cannot be imported, use an existing model path only when the prompt "
-                "clearly requires that model; otherwise use String for text or BigInt for an integer. "
-                "Never invent a replacement model path."
-            ),
-            "user": "PROMPT FILE:\n{{prompt_toml}}\n\nFEEDBACK:\n{{feedback}}",
-        },
-        "variables": [
-            {"name": "prompt_toml", "type": "string", "required": True},
-            {"name": "feedback", "type": "string", "required": True},
-        ],
-        "output": "String",
-    },
-    source="<built-in update prompt>",
+    PromptTestResult,
 )
 
 
@@ -107,12 +82,23 @@ def _prompt_path(path: Path | None) -> Path:
     return matches[0]
 
 
-def _openai_executor(prompt: PromptNinja):
-    if not os.getenv("OPENAI_API_KEY"):
+def _select_test(prompt: PromptNinja, test_name: str | None) -> PromptNinja | None:
+    """Return a prompt containing only the requested named test, when selected."""
+    if test_name is None:
+        return prompt
+    matches = [test for test in prompt.tests if test.name == test_name]
+    if not matches:
+        return None
+    definition = prompt.spec.model_dump(by_alias=True, exclude_none=True)
+    definition["tests"] = [matches[0].model_dump(exclude_none=True)]
+    return PromptNinja(definition, source=prompt.source)
+
+
+def _openrouter_executor(prompt: PromptNinja, client: OpenRouterPromptClient):
+    if not os.getenv("OPENROUTER_API_KEY"):
         raise click.ClickException(
-            "OPENAI_API_KEY is required to run LLM prompt tests."
+            "OPENROUTER_API_KEY is required to run LLM prompt tests."
         )
-    client = OpenAIPromptClient()
 
     async def execute(prepared):
         return await client.execute(prompt, prepared)
@@ -120,42 +106,212 @@ def _openai_executor(prompt: PromptNinja):
     return execute
 
 
-async def _run_tests(prompt: PromptNinja, judge_model: str) -> PromptTestReport:
+async def _run_tests(
+    prompt: PromptNinja,
+    judge_model: str,
+    client: OpenRouterPromptClient | None = None,
+    on_start: Callable[[Any], Any] | None = None,
+    on_result: Callable[[PromptTestResult], Any] | None = None,
+) -> PromptTestReport:
     if not prompt.tests:
         return PromptTestReport(prompt_name=prompt.name, results=())
-    executor = _openai_executor(prompt)
-    judge_prompt = PromptNinja.from_file(TEST_JUDGE_PROMPT_FILE)
+    owned_client = client is None
+    prompt_client = client or OpenRouterPromptClient()
+    try:
+        executor = _openrouter_executor(prompt, prompt_client)
+        judge_prompt = PROMPTS.test_judge
 
-    async def judge(test, actual):
-        return await judge_prompt.run_openai(
-            {
-                "expected_output": test.expected_output,
-                "actual_output": json.dumps(actual, ensure_ascii=False),
-            },
-            model=judge_model,
+        async def judge(test, actual):
+            if isinstance(actual, BaseModel):
+                actual = actual.model_dump(mode="json")
+            prepared = judge_prompt.prepare(
+                {
+                    "expected_output": test.expected_output,
+                    "actual_output": json.dumps(actual, ensure_ascii=False),
+                }
+            )
+            return await prompt_client.execute(
+                judge_prompt,
+                prepared,
+                runtime=PromptRuntimeOptions(model=judge_model),
+            )
+
+        return await prompt.arun_tests(
+            executor,
+            judge=judge,
+            on_start=on_start,
+            on_result=on_result,
         )
+    finally:
+        if owned_client:
+            await prompt_client.aclose()
 
-    return await prompt.arun_tests(executor, judge=judge)
+
+async def _run_prompt_test_suite(
+    prompts: list[PromptNinja], judge_model: str, show_progress: bool = True
+) -> list[PromptTestReport]:
+    """Keep one HTTP client and event loop alive for a complete CLI test run."""
+    client = OpenRouterPromptClient()
+    total = sum(len(prompt.tests) for prompt in prompts)
+    progress = Progress() if total and show_progress else None
+    task_id = (
+        progress.add_task("Preparing prompt tests", total=total) if progress else None
+    )
+    try:
+        if progress:
+            progress.start()
+        reports: list[PromptTestReport] = []
+        for prompt in prompts:
+            if progress and task_id is not None:
+                progress.update(
+                    task_id,
+                    description="Running %s (%d tests)"
+                    % (prompt.name, len(prompt.tests)),
+                )
+
+            def on_result(
+                result: PromptTestResult, prompt_name: str = prompt.name
+            ) -> None:
+                status = "passed" if result.passed else "failed"
+                if progress and task_id is not None:
+                    progress.update(
+                        task_id,
+                        advance=1,
+                        description="%s: %s %s" % (prompt_name, status, result.name),
+                    )
+
+            def on_start(test: Any, prompt_name: str = prompt.name) -> None:
+                if progress and task_id is not None:
+                    progress.update(
+                        task_id,
+                        description="%s: running %s"
+                        % (prompt_name, test.name or "unnamed test"),
+                    )
+
+            reports.append(
+                await _run_tests(
+                    prompt,
+                    judge_model,
+                    client=client,
+                    on_start=on_start,
+                    on_result=on_result,
+                )
+            )
+        if progress and task_id is not None:
+            progress.update(task_id, description="Completed prompt tests")
+        return reports
+    finally:
+        if progress:
+            progress.stop()
+        await client.aclose()
 
 
-def _show_report(report: PromptTestReport, verbose: bool) -> None:
-    if not report.results:
-        click.echo("%s: no embedded test cases (skipped)" % report.prompt_name)
+def _short_text(value: str, limit: int = 110) -> str:
+    compact = " ".join(value.split())
+    return compact if len(compact) <= limit else "%s…" % compact[: limit - 1]
+
+
+def _json_display(value: Any) -> str:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+
+
+def _show_verbose_result(
+    report: PromptTestReport, result: PromptTestResult, console: Console | None
+) -> None:
+    sections = [
+        "%s / %s" % (report.prompt_name, result.name),
+        "input:\n%s" % _json_display(result.input),
+        "expected:\n%s" % _json_display(result.expected),
+    ]
+    if result.actual is not None:
+        sections.append("actual:\n%s" % _json_display(result.actual))
+    if result.rationale:
+        sections.append("rationale:\n%s" % result.rationale)
+    if result.error:
+        sections.append("error:\n%s" % result.error)
+    output = "\n".join(sections)
+    if console is None:
+        click.echo(output)
+    else:
+        console.print(Text(output, style="dim"))
+
+
+def _show_report(
+    report: PromptTestReport, verbose: bool, console: Console | None
+) -> None:
+    if console is None:
+        if not report.results:
+            click.echo("%s: no embedded test cases (skipped)" % report.prompt_name)
+            return
+        for result in report.results:
+            state = "PASS" if result.passed else "FAIL"
+            score = "—" if result.score is None else "%.2f" % result.score
+            detail = result.error or result.rationale or "No rationale returned."
+            click.echo(
+                "%s %s / %s (%s): %s"
+                % (state, report.prompt_name, result.name, score, _short_text(detail))
+            )
+            if verbose:
+                _show_verbose_result(report, result, console)
         return
-    for result in report.results:
-        state = (
-            click.style("PASS", fg="green")
-            if result.passed
-            else click.style("FAIL", fg="red")
+    if not report.results:
+        console.print(
+            Text(
+                "%s: no embedded test cases (skipped)" % report.prompt_name,
+                style="yellow",
+            )
         )
-        score = "" if result.score is None else " (score %.2f)" % result.score
-        click.echo("%s %s — %s%s" % (state, report.prompt_name, result.name, score))
-        if verbose and result.passed:
-            click.echo("  actual: %s" % json.dumps(result.actual, ensure_ascii=False))
-        if result.rationale:
-            click.echo("  %s" % result.rationale)
-        if result.error:
-            click.echo("  %s" % result.error)
+        return
+
+    table = Table()
+    table.add_column("Status", justify="center", no_wrap=True)
+    table.add_column("Test", min_width=24)
+    table.add_column("Score", justify="right", no_wrap=True)
+    table.add_column("Result", ratio=1)
+    for result in report.results:
+        state = Text.styled(
+            "PASS" if result.passed else "FAIL",
+            "bold green" if result.passed else "bold red",
+        )
+        detail = result.error or result.rationale or "No rationale returned."
+        table.add_row(
+            state,
+            Text(result.name),
+            Text("—" if result.score is None else "%.2f" % result.score),
+            Text(_short_text(detail), style="red" if result.error else ""),
+        )
+    console.print(
+        Text("%s (%d tests)" % (report.prompt_name, len(report.results)), style="bold")
+    )
+    console.print(table)
+    if verbose:
+        for result in report.results:
+            _show_verbose_result(report, result, console)
+
+
+def _show_test_summary(
+    reports: list[PromptTestReport], console: Console | None
+) -> None:
+    results = [result for report in reports for result in report.results]
+    passed = sum(result.passed for result in results)
+    failed = len(results) - passed
+    style = "bold green" if failed == 0 else "bold red"
+    summary = "Summary: %d passed, %d failed across %d prompts." % (
+        passed,
+        failed,
+        len(reports),
+    )
+    if console is None:
+        click.echo(summary)
+    else:
+        console.print(
+            Text.styled(
+                summary,
+                style,
+            )
+        )
 
 
 def _strip_toml_fence(value: str) -> str:
@@ -167,7 +323,8 @@ def _strip_toml_fence(value: str) -> str:
 
 async def _repair_prompt_file(prompt_file: Path, feedback: str, model: str) -> str:
     original = prompt_file.read_text(encoding="utf-8")
-    updated = await UPDATE_PROMPT.run_openai(
+    updater_prompt = PROMPTS.prompt_updater
+    updated = await updater_prompt.run_openrouter(
         {"prompt_toml": original, "feedback": feedback}, model=model
     )
     candidate = _strip_toml_fence(updated)
@@ -236,13 +393,32 @@ def generate(goal: str | None, config_path: Path, output: Path | None) -> None:
 )
 @click.option("--judge-model", default=DEFAULT_MODEL, show_default=True)
 @click.option(
-    "--verbose", "-v", is_flag=True, help="Show model output for passing cases."
+    "--test-name", "-n", help="Run only one embedded test by its [[tests]].name."
 )
-def test_prompt(prompt_path: Path | None, judge_model: str, verbose: bool) -> None:
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Show actual model output for every case."
+)
+@click.option("--plain", is_flag=True, help="Disable Rich tables and progress output.")
+def test_prompt(
+    prompt_path: Path | None,
+    judge_model: str,
+    test_name: str | None,
+    verbose: bool,
+    plain: bool,
+) -> None:
     """Run a prompt's embedded examples and score them with an LLM judge."""
     prompt = PromptNinja.from_file(_prompt_path(prompt_path))
-    report = asyncio.run(_run_tests(prompt, judge_model))
-    _show_report(report, verbose)
+    selected_prompt = _select_test(prompt, test_name)
+    if selected_prompt is None:
+        raise click.ClickException(
+            "No embedded test named %r found in %s." % (test_name, prompt.name)
+        )
+    report = asyncio.run(
+        _run_prompt_test_suite([selected_prompt], judge_model, show_progress=not plain)
+    )[0]
+    console = None if plain else Console()
+    _show_report(report, verbose, console)
+    _show_test_summary([report], console)
     if not report.passed:
         raise click.exceptions.Exit(1)
 
@@ -260,27 +436,46 @@ def test_prompt(prompt_path: Path | None, judge_model: str, verbose: bool) -> No
 )
 @click.option("--judge-model", default=DEFAULT_MODEL, show_default=True)
 @click.option(
-    "--verbose", "-v", is_flag=True, help="Show model output for passing cases."
+    "--test-name", "-n", help="Run only one embedded test by its [[tests]].name."
 )
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Show actual model output for every case."
+)
+@click.option("--plain", is_flag=True, help="Disable Rich tables and progress output.")
 def test_prompts(
-    prompts_dir: Path, prompt_name: str | None, judge_model: str, verbose: bool
+    prompts_dir: Path,
+    prompt_name: str | None,
+    judge_model: str,
+    test_name: str | None,
+    verbose: bool,
+    plain: bool,
 ) -> None:
     """Run embedded test cases across pipeline prompt TOML files."""
     paths = sorted(prompts_dir.glob("*.prompt.toml"))
     if not paths:
         raise click.ClickException("No *.prompt.toml files found in %s." % prompts_dir)
-    reports: list[PromptTestReport] = []
-    for path in paths:
-        prompt = PromptNinja.from_file(path)
+    prompts: list[PromptNinja] = []
+    for prompt in PromptCollection(dir=prompts_dir).values():
         if prompt_name and prompt.name != prompt_name:
             continue
-        reports.append(asyncio.run(_run_tests(prompt, judge_model)))
-    if prompt_name and not reports:
+        selected_prompt = _select_test(prompt, test_name)
+        if selected_prompt is not None:
+            prompts.append(selected_prompt)
+    if prompt_name and not prompts:
         raise click.ClickException(
             "No prompt named %r found in %s." % (prompt_name, prompts_dir)
         )
+    if test_name and not prompts:
+        raise click.ClickException(
+            "No embedded test named %r found in %s." % (test_name, prompts_dir)
+        )
+    reports = asyncio.run(
+        _run_prompt_test_suite(prompts, judge_model, show_progress=not plain)
+    )
+    console = None if plain else Console()
     for report in reports:
-        _show_report(report, verbose)
+        _show_report(report, verbose, console)
+    _show_test_summary(reports, console)
     if any(not report.passed for report in reports):
         raise click.exceptions.Exit(1)
 
@@ -295,9 +490,9 @@ def update(prompt_file: Path, feedback: str, model: str) -> None:
     """Update a prompt TOML file from natural-language feedback."""
     if not prompt_file.name.endswith(".prompt.toml"):
         raise click.UsageError("prompt_file must use the .prompt.toml extension.")
-    if not os.getenv("OPENAI_API_KEY"):
+    if not os.getenv("OPENROUTER_API_KEY"):
         raise click.ClickException(
-            "OPENAI_API_KEY is required to update a prompt with LLM feedback."
+            "OPENROUTER_API_KEY is required to update a prompt with LLM feedback."
         )
     backup = asyncio.run(_repair_prompt_file(prompt_file, feedback, model))
     click.echo("Updated %s (backup: %s)" % (prompt_file, backup))
@@ -314,8 +509,10 @@ def validate(path: Path, fix: bool, model: str) -> None:
     paths = _validation_paths(path)
     if not paths:
         raise click.ClickException("No *.prompt.toml files found in %s." % path)
-    if fix and not os.getenv("OPENAI_API_KEY"):
-        raise click.ClickException("OPENAI_API_KEY is required to fix prompt files.")
+    if fix and not os.getenv("OPENROUTER_API_KEY"):
+        raise click.ClickException(
+            "OPENROUTER_API_KEY is required to fix prompt files."
+        )
     failures = 0
     for prompt_file in paths:
         try:

@@ -1,0 +1,88 @@
+[metadata]
+spec_version = "1.2"
+name = "prompt_updater"
+description = "Updates a Prompt Ninja TOML file from concise feedback."
+used_by = ["backend/app/cli.py"]
+version = "1.0.0"
+output = "String"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+You update Prompt Ninja prompt files. Apply the feedback to the supplied TOML
+prompt file. Return only a complete, valid *.prompt.toml document; do not use
+Markdown fences. Preserve metadata.spec_version = "1.2" and every required
+section.
+
+metadata.output must be String, BigInt, or an importable dotted Pydantic
+BaseModel path. When feedback says an output model cannot be imported, use an
+existing supplied model path only when it clearly fits; otherwise use String for
+text or BigInt for one integer. Never invent a replacement model path.
+"""
+
+user = """
+PROMPT FILE:
+{{prompt_toml}}
+
+FEEDBACK:
+{{feedback}}
+"""
+
+[[variables]]
+name = "prompt_toml"
+type = "string"
+description = "The complete prompt TOML document to update."
+required = true
+
+[[variables]]
+name = "feedback"
+type = "string"
+description = "The requested correction or improvement."
+required = true
+
+[[tests]]
+name = "updates a task instruction"
+variable.prompt_toml = '''[metadata]
+spec_version = "1.2"
+name = "sample"
+description = "A sample prompt."
+used_by = ["backend/app/example.py"]
+version = "1.0.0"
+output = "String"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+[prompt]
+user = "Summarize {{source}}."
+[[variables]]
+name = "source"
+type = "string"
+description = "Source material."
+required = true'''
+variable.feedback = "Make the summary concise and preserve the existing variable."
+expected_output = "Returns only valid Prompt Ninja TOML, preserves the source variable and metadata, and adds the requested concision guidance."
+
+[[tests]]
+name = "repairs an invalid output model"
+variable.prompt_toml = '''[metadata]
+spec_version = "1.2"
+name = "sample"
+description = "A sample prompt."
+used_by = ["backend/app/example.py"]
+version = "1.0.0"
+output = "app.models.DoesNotExist"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+[prompt]
+user = "Summarize {{source}}."
+[[variables]]
+name = "source"
+type = "string"
+description = "Source material."
+required = true'''
+variable.feedback = "Repair the invalid output model while keeping this a text summary prompt."
+expected_output = "Returns valid TOML with output set to String and preserves the text-summary task and source variable."

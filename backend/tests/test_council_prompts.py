@@ -11,6 +11,7 @@ from app.agents import (
 )
 from app.main import app
 from app.models import Brief
+from app.prompt_catalog import PROMPTS
 from app.prompt_ninja import PromptNinja
 from fastapi.testclient import TestClient
 
@@ -26,17 +27,15 @@ def test_council_prompt_files_render_with_the_runtime_context():
         assert "Create an accurate summary" in prepared.user
 
 
-def test_requirements_prompt_requires_array_valued_output_fields():
+def test_requirements_prompt_injects_array_valued_output_fields():
     prompt = PromptNinja.from_file(REQUIREMENTS_PROMPT_FILE)
+    prepared = prompt.prepare({"brief": {}, "council_context": {}})
 
-    assert (
-        "inputs, constraints,\nassumptions, and risks fields must each be JSON arrays of strings"
-        in prompt.spec.template.system
-    )
-    assert (
-        "Never return a single string or an object for those fields"
-        in prompt.spec.template.system
-    )
+    properties = prompt.output_json_schema["properties"]
+    assert properties["inputs"]["type"] == "array"
+    assert properties["constraints"]["type"] == "array"
+    assert "Output contract" in prepared.system
+    assert '"inputs"' in prepared.system
 
 
 def test_council_uses_toml_defaults_and_allows_an_override():
@@ -45,6 +44,14 @@ def test_council_uses_toml_defaults_and_allows_an_override():
             return {"draft": "A proposal", "rationale": "A rationale"}
 
     council = PromptCouncil()
+    assert council.requirements_prompt_spec is PROMPTS.requirements
+    assert council.creator_prompt_specs == [
+        PROMPTS.creator_1,
+        PROMPTS.creator_2,
+        PROMPTS.creator_3,
+    ]
+    assert council.judge_prompt_spec is PROMPTS.judge
+    assert council.compiler_prompt_spec is PROMPTS.prompt_compiler
     council.prompt_client = FakePromptClient()
     brief = Brief(outcome="Create an accurate summary")
     _, default = asyncio.run(
@@ -62,7 +69,7 @@ def test_council_uses_toml_defaults_and_allows_an_override():
     )
 
     assert "Creator 1" in default.system
-    assert override.system == "Custom creator instruction"
+    assert override.system.startswith("Custom creator instruction\n\nOutput contract")
     assert (
         default_agent_instructions()["judge"]
         == council.judge_prompt_spec.spec.template.system
@@ -150,21 +157,30 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
             if prepared.name == "prompt_compiler":
                 return {
                     "definition": {
-                        "spec_version": "1.0",
-                        "prompt": {
+                        "metadata": {
+                            "spec_version": "1.2",
                             "name": "project-summary",
                             "description": "Summarizes project updates.",
-                            "used_in": ["backend/tests/test_council_prompts.py"],
+                            "used_by": ["backend/tests/test_council_prompts.py"],
+                            "version": "1.0.0",
+                            "output": "String",
                         },
-                        "model": {"provider": "openai", "name": "gpt-5.6-sol"},
-                        "template": {
+                        "llm_model": {
+                            "provider": "openrouter",
+                            "name": "google/gemini-2.5-flash",
+                        },
+                        "prompt": {
                             "system": "Create a concise summary from the input.",
                             "user": "{{input}}",
                         },
                         "variables": [
-                            {"name": "input", "type": "string", "required": True}
+                            {
+                                "name": "input",
+                                "type": "string",
+                                "description": "The project update to summarize.",
+                                "required": True,
+                            }
                         ],
-                        "output": "String",
                     }
                 }
             raise AssertionError("Unexpected prompt: %s" % prepared.name)
@@ -192,12 +208,12 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
         "gpt-5.6-terra",
         "gpt-5.6-sol",
     ]
-    assert result.prompt_definition["template"]["user"] == "{{input}}"
+    assert result.prompt_definition["prompt"]["user"] == "{{input}}"
     assert result.prompt_test["passed"]
     assert result.prompt_definition["tests"] == [
         {
             "name": "Generated self-test fixture",
-            "input": {"input": "A project update."},
+            "variable": {"input": "A project update."},
             "expected_output": "A concise summary.",
         }
     ]
@@ -214,10 +230,10 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
 
 
 def test_toml_judge_requires_provider_access(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     council = PromptCouncil()
     brief = Brief(outcome="Create an accurate summary")
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         asyncio.run(
             council.run_prompt(
                 council.judge_prompt_spec,

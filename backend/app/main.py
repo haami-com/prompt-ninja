@@ -16,11 +16,9 @@ from .models import (
     GeneratedPromptTestResult,
     PromptExportRequest,
 )
-from .model_config import DEFAULT_MODEL, available_models
+from .model_config import DEFAULT_MODEL, available_models, is_available_model
 from .prompt_export import export_prompt_toml, prompt_filename
 from .prompt_testing import PromptTestHarness
-
-ALLOWED_MODELS = set(available_models())
 
 app = FastAPI(title="Board of Prompts API", version="0.1.0")
 origins_env = (
@@ -44,7 +42,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "provider_configured": bool(os.getenv("OPENAI_API_KEY"))}
+    return {"ok": True, "provider_configured": bool(os.getenv("OPENROUTER_API_KEY"))}
 
 
 @app.get("/api/prompts")
@@ -54,7 +52,7 @@ async def prompt_defaults():
 
 @app.get("/api/models")
 async def model_defaults():
-    return {"models": sorted(ALLOWED_MODELS), "default_model": DEFAULT_MODEL}
+    return {"models": await available_models(), "default_model": DEFAULT_MODEL}
 
 
 async def _extract_numbered_files(
@@ -101,9 +99,9 @@ async def enhance_brief(
         raise HTTPException(
             status_code=413, detail="Upload up to five reference files."
         )
-    if not os.getenv("OPENAI_API_KEY"):
+    if not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(
-            status_code=503, detail="Set OPENAI_API_KEY to enhance the brief."
+            status_code=503, detail="Set OPENROUTER_API_KEY to enhance the brief."
         )
     numbered_sources = await _extract_numbered_files(files)
     try:
@@ -116,14 +114,16 @@ async def enhance_brief(
 
 @app.post("/api/test-generated", response_model=GeneratedPromptTestResult)
 async def test_generated_prompt(request: GeneratedPromptTestRequest):
-    if request.model not in ALLOWED_MODELS or request.judge_model not in ALLOWED_MODELS:
+    if not await is_available_model(request.model) or not await is_available_model(
+        request.judge_model
+    ):
         raise HTTPException(
             status_code=422, detail="Choose supported runner and judge models."
         )
     harness = PromptTestHarness()
     if not harness.enabled:
         raise HTTPException(
-            status_code=503, detail="Set OPENAI_API_KEY to run generated-prompt tests."
+            status_code=503, detail="Set OPENROUTER_API_KEY to run generated-prompt tests."
         )
     try:
         return await harness.run(request)
@@ -135,7 +135,7 @@ async def test_generated_prompt(request: GeneratedPromptTestRequest):
 
 @app.post("/api/export-prompt")
 async def export_prompt(request: PromptExportRequest):
-    if request.model not in ALLOWED_MODELS:
+    if not await is_available_model(request.model):
         raise HTTPException(
             status_code=422, detail="Choose a supported model for the exported prompt."
         )
@@ -186,14 +186,14 @@ async def generate(
         if (
             not isinstance(selected_creators, list)
             or len(selected_creators) != 3
-            or any(model not in ALLOWED_MODELS for model in selected_creators)
+            or any(not await is_available_model(model) for model in selected_creators)
         ):
             raise HTTPException(
                 status_code=422, detail="Choose exactly three supported creator models."
             )
     else:
         selected_creators = None
-    if judge_model and judge_model not in ALLOWED_MODELS:
+    if judge_model and not await is_available_model(judge_model):
         raise HTTPException(status_code=422, detail="Choose a supported judge model.")
     try:
         selected_creator_prompts = json.loads(creator_prompts)

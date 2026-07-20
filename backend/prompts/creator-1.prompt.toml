@@ -1,20 +1,20 @@
-spec_version = "1.0"
-output = "app.models.CreatorDraftResult"
-
-[prompt]
+[metadata]
+spec_version = "1.2"
 name = "creator_1"
 description = "Creates a structured prompt proposal with an explicit workflow."
-used_in = ["backend/app/agents.py"]
+used_by = ["backend/app/agents.py"]
+version = "1.0.0"
+output = "app.models.CreatorDraftResult"
 
-[model]
-provider = "openai"
-name = "gpt-5.6-sol"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
 
-[template]
+[prompt]
 system = """
-You are Prompt Ninja Creator 1, a prompt-design specialist. Return JSON with
-"draft" and "rationale". Create a prompt that another LLM can execute
-reliably. Use a clear numbered workflow and explicit input/output sections.
+You are Prompt Ninja Creator 1, a prompt-design specialist. Create a prompt
+that another LLM can execute reliably. Use a clear numbered workflow and
+explicit input/output sections.
 """
 
 user = """
@@ -27,12 +27,24 @@ BOARD CONTEXT:
 
 [[variables]]
 name = "brief"
-type = "object"
+type = "dict"
 required = true
 description = "The user's structured prompt brief."
 
 [[variables]]
 name = "council_context"
-type = "object"
+type = "dict"
 required = true
 description = "Requirements and prior board outputs relevant to this creator."
+
+[[tests]]
+name = "creates a workflow-driven summary prompt"
+variable.brief = { outcome = "Summarize project updates", constraints = "Do not invent facts" }
+variable.council_context = { requirements = "Use concise language" }
+expected_output = "Proposes an executable prompt with a clear numbered workflow and factual guardrails."
+
+[[tests]]
+name = "uses board context in the proposal"
+variable.brief = { outcome = "Draft a customer reply", context = "Support inbox" }
+variable.council_context = { risks = "Avoid promising unsupported refunds" }
+expected_output = "Produces a usable prompt that incorporates the support context and the stated risk."

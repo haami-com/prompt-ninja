@@ -10,14 +10,16 @@ from app.prompt_ninja import PromptFileSpec, PromptNinja
 
 def canonical_definition():
     return {
-        "spec_version": "1.0",
-        "prompt": {
+        "metadata": {
+            "spec_version": "1.2",
             "name": "code-review",
             "description": "Reviews a user specification.",
-            "used_in": ["src/prompt_consumer.py"],
+            "used_by": ["src/prompt_consumer.py"],
+            "version": "1.0.0",
+            "output": "String",
         },
-        "model": {"provider": "openai", "name": "gpt-5.6-sol"},
-        "template": {
+        "llm_model": {"provider": "openrouter", "name": "google/gemini-2.5-flash"},
+        "prompt": {
             "system": "Review the specification and return advice.",
             "user": "{{USER_SPECIFICATION}}",
         },
@@ -29,12 +31,11 @@ def canonical_definition():
                 "description": "The specification to review.",
             }
         ],
-        "output": "String",
         "testing": {"pass_threshold": 0.95},
         "tests": [
             {
                 "name": "summarize_complex_spec",
-                "input": {"USER_SPECIFICATION": "Do not mutate the input."},
+                "variable": {"USER_SPECIFICATION": "Do not mutate the input."},
                 "expected_output": "A review that preserves the constraint.",
             }
         ],
@@ -58,14 +59,22 @@ def test_compiler_does_not_normalize_an_incompatible_schema_dialect():
     malformed["variables"] = {
         "USER_SPECIFICATION": {"type": "string"},
     }
-    malformed["output"] = {
+    malformed["metadata"]["output"] = {
         "type": "string",
         "description": "A concise review.",
     }
-    malformed["tests"][0]["variables"] = malformed["tests"][0].pop("input")
 
     with pytest.raises(ValidationError):
         CompiledPromptResult.model_validate({"definition": malformed})
+
+
+def test_compiler_discards_only_an_invalid_model_generated_default():
+    definition = canonical_definition()
+    definition["variables"][0]["default"] = False
+
+    result = CompiledPromptResult.model_validate({"definition": definition})
+
+    assert not result.definition.variables[0].has_default
 
 
 def test_prompt_toml_resolves_its_declared_pydantic_output_model():
@@ -89,7 +98,7 @@ def test_compiler_passes_its_toml_declared_model_to_responses_parse():
 
     responses = FakeResponses()
     result = asyncio.run(
-        compiler_prompt.run_openai(
+        compiler_prompt.run_openrouter(
             {
                 "goal": "Review a specification",
                 "model": "gpt-5.6-sol",

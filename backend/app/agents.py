@@ -18,11 +18,13 @@ from .models import (
     PromptSpec,
 )
 from .prompt_ninja import (
-    OpenAIPromptClient,
+    OpenRouterPromptClient,
     PreparedPrompt,
     PromptNinja,
     PromptRuntimeOptions,
 )
+from .prompt_catalog import PROMPTS
+from .prompt_compiler import CompiledPromptResult
 from .prompt_testing import PromptTestHarness, fixture_values_for_prompt
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -34,10 +36,6 @@ CREATOR_PROMPT_FILES = tuple(
 JUDGE_PROMPT_FILE = PROMPTS_DIRECTORY / "judge.prompt.toml"
 REQUIREMENTS_PROMPT_FILE = PROMPTS_DIRECTORY / "requirements.prompt.toml"
 COMPILER_PROMPT_FILE = PROMPTS_DIRECTORY / "prompt-compiler.prompt.toml"
-
-
-def _load_prompt(path: Path) -> PromptNinja:
-    return PromptNinja.from_file(path)
 
 
 def _editor_metadata(prompt: PromptNinja) -> dict[str, Any]:
@@ -65,8 +63,8 @@ def _editor_metadata(prompt: PromptNinja) -> dict[str, Any]:
 
 def default_agent_instructions() -> dict[str, Any]:
     """Expose TOML-defined defaults for the optional prompt editor."""
-    creator_prompts = [_load_prompt(path) for path in CREATOR_PROMPT_FILES]
-    judge_prompt = _load_prompt(JUDGE_PROMPT_FILE)
+    creator_prompts = [PROMPTS.creator_1, PROMPTS.creator_2, PROMPTS.creator_3]
+    judge_prompt = PROMPTS.judge
     return {
         "creators": [prompt.spec.template.system for prompt in creator_prompts],
         "judge": judge_prompt.spec.template.system,
@@ -86,14 +84,16 @@ class PromptCouncil:
         judge_prompt: str | None = None,
     ):
         self.prompt_client = None
-        if os.getenv("OPENAI_API_KEY"):
-            self.prompt_client = OpenAIPromptClient()
-        self.requirements_prompt_spec = _load_prompt(REQUIREMENTS_PROMPT_FILE)
+        if os.getenv("OPENROUTER_API_KEY"):
+            self.prompt_client = OpenRouterPromptClient()
+        self.requirements_prompt_spec = PROMPTS.requirements
         self.creator_prompt_specs = [
-            _load_prompt(path) for path in CREATOR_PROMPT_FILES
+            PROMPTS.creator_1,
+            PROMPTS.creator_2,
+            PROMPTS.creator_3,
         ]
-        self.judge_prompt_spec = _load_prompt(JUDGE_PROMPT_FILE)
-        self.compiler_prompt_spec = _load_prompt(COMPILER_PROMPT_FILE)
+        self.judge_prompt_spec = PROMPTS.judge
+        self.compiler_prompt_spec = PROMPTS.prompt_compiler
         self.creator_models = creator_models or [
             prompt.spec.model.name for prompt in self.creator_prompt_specs
         ]
@@ -117,7 +117,7 @@ class PromptCouncil:
         prepared = prompt.prepare(runtime_variables, system_override=system_override)
         if not self.prompt_client:
             raise RuntimeError(
-                "The TOML-defined prompt requires OPENAI_API_KEY to run."
+                "The TOML-defined prompt requires OPENROUTER_API_KEY to run."
             )
         runtime = PromptRuntimeOptions(model=model) if model else None
         effective_output_model = output_model or prompt.output_model
@@ -127,9 +127,14 @@ class PromptCouncil:
             runtime=runtime,
             output_model=effective_output_model,
         )
-        return (
-            output.model_dump() if isinstance(output, BaseModel) else output
-        ), prepared
+        if isinstance(output, BaseModel):
+            return (
+                output.model_dump(
+                    exclude_none=isinstance(output, CompiledPromptResult)
+                ),
+                prepared,
+            )
+        return output, prepared
 
     async def stream(self, brief: Brief) -> AsyncIterator[AgentMessage | CouncilResult]:
         agents: list[AgentMessage] = []
@@ -265,7 +270,7 @@ class PromptCouncil:
             compiled_definition["tests"] = [
                 {
                     "name": "Generated self-test fixture",
-                    "input": fixture_values_for_prompt(
+                    "variable": fixture_values_for_prompt(
                         compiled_prompt, candidate_test.input
                     ),
                     "expected_output": candidate_test.expected_output,

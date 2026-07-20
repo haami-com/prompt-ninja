@@ -30,19 +30,26 @@ def prompt_from_export_request(request: PromptExportRequest) -> PromptNinja:
     ]
     return PromptNinja(
         {
-            "spec_version": "1.0",
-            "prompt": {
+            "metadata": {
+                "spec_version": "1.2",
                 "name": name,
                 "description": "Generated from: " + request.goal,
-                "used_in": ["src/prompt_consumer.py"],
+                "used_by": ["src/prompt_consumer.py"],
+                "version": "1.0.0",
+                "output": "String",
             },
-            "model": {"provider": "openai", "name": request.model},
-            "template": {"system": request.final_prompt, "user": "{{input}}"},
+            "llm_model": {"provider": "openrouter", "name": request.model},
+            "prompt": {"system": request.final_prompt, "user": "{{input}}"},
             "variables": [
-                {"name": variable_name, "type": "string", "required": True}
+                {
+                    "name": variable_name,
+                    "type": "string",
+                    "description": "The %s supplied to this prompt."
+                    % variable_name.replace("_", " "),
+                    "required": True,
+                }
                 for variable_name in variable_names
             ],
-            "output": "String",
         },
         source="<prompt export>",
     )

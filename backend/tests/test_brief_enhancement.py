@@ -8,6 +8,7 @@ import app.main as main_module
 from app.brief_enhancement import BriefEnhancer
 from app.main import app
 from app.models import BriefEnhancementResult
+from app.prompt_catalog import PROMPTS
 
 
 def enhancement_result() -> BriefEnhancementResult:
@@ -84,6 +85,10 @@ def test_brief_enhancer_rejects_a_reference_to_a_file_that_was_not_uploaded():
         )
 
 
+def test_brief_enhancer_reuses_the_startup_prompt_collection():
+    assert BriefEnhancer().prompt is PROMPTS.brief_enhancer
+
+
 def test_enhance_endpoint_assigns_stable_file_numbers(monkeypatch):
     captured = {}
 
@@ -93,7 +98,7 @@ def test_enhance_endpoint_assigns_stable_file_numbers(monkeypatch):
             captured["file_sources"] = file_sources
             return enhancement_result()
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(main_module, "BriefEnhancer", FakeEnhancer)
     response = TestClient(app).post(
         "/api/enhance-brief",
@@ -117,7 +122,7 @@ def test_enhance_endpoint_assigns_stable_file_numbers(monkeypatch):
 
 
 def test_enhance_endpoint_rejects_more_than_five_files(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     response = TestClient(app).post(
         "/api/enhance-brief",
         data={"request_text": "Create a useful prompt from these source files."},

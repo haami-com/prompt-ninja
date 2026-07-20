@@ -7,6 +7,27 @@ from app.prompt_ninja import PromptNinja
 from fastapi.testclient import TestClient
 
 
+def test_models_endpoint_exposes_openrouter_pricing(monkeypatch):
+    async def fake_available_models():
+        return (
+            {
+                "id": "google/gemini-2.5-flash",
+                "name": "Gemini 2.5 Flash",
+                "context_length": 1_000_000,
+                "pricing": {"prompt": "0.0000003", "completion": "0.0000025"},
+                "supported_parameters": ["structured_outputs"],
+            },
+        )
+
+    monkeypatch.setattr("app.main.available_models", fake_available_models)
+    response = TestClient(app).get("/api/models")
+
+    assert response.status_code == 200
+    model = response.json()["models"][0]
+    assert model["id"] == "google/gemini-2.5-flash"
+    assert model["pricing"]["prompt"] == "0.0000003"
+
+
 def test_export_creates_a_valid_prompt_toml_file(tmp_path):
     request = PromptExportRequest(
         final_prompt="Summarize the user's text in three bullets.",
@@ -43,7 +64,8 @@ def test_export_declares_placeholders_from_the_generated_prompt(tmp_path):
         }
     )
 
-    assert prepared.system == "Summarize Launch planning notes for executives."
+    assert prepared.system.startswith("Summarize Launch planning notes for executives.\n\n")
+    assert "metadata.output = 'String'" in prepared.system
 
 
 def test_export_serializes_a_supplied_prompt_ninja_definition_without_losing_its_schema_or_tests(
@@ -73,7 +95,7 @@ def test_export_endpoint_downloads_toml(tmp_path, monkeypatch):
         json={
             "final_prompt": "Summarize the user's text in three bullets.",
             "goal": "Summarize legal documents into plain English",
-            "model": "gpt-5.6-sol",
+            "model": "google/gemini-2.5-flash",
         },
     )
     assert response.status_code == 200

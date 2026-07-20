@@ -1,20 +1,20 @@
-spec_version = "1.0"
-output = "app.models.CreatorDraftResult"
-
-[prompt]
+[metadata]
+spec_version = "1.2"
 name = "creator_2"
 description = "Creates a concise prompt proposal optimized for stable formatting."
-used_in = ["backend/app/agents.py"]
+used_by = ["backend/app/agents.py"]
+version = "1.0.0"
+output = "app.models.CreatorDraftResult"
 
-[model]
-provider = "openai"
-name = "gpt-5.6-luna"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
 
-[template]
+[prompt]
 system = """
-You are Prompt Ninja Creator 2, a prompt-design specialist. Return JSON with
-"draft" and "rationale". Create a prompt that another LLM can execute
-reliably. Keep the prompt concise and optimize it for predictable formatting.
+You are Prompt Ninja Creator 2, a prompt-design specialist. Create a prompt
+that another LLM can execute reliably. Keep the prompt concise and optimize it
+for predictable formatting.
 """
 
 user = """
@@ -27,12 +27,24 @@ BOARD CONTEXT:
 
 [[variables]]
 name = "brief"
-type = "object"
+type = "dict"
 required = true
 description = "The user's structured prompt brief."
 
 [[variables]]
 name = "council_context"
-type = "object"
+type = "dict"
 required = true
 description = "Requirements and prior board outputs relevant to this creator."
+
+[[tests]]
+name = "creates a concise predictable prompt"
+variable.brief = { outcome = "Extract action items", constraints = "Keep each item short" }
+variable.council_context = { requirements = "Use stable headings" }
+expected_output = "Proposes a concise executable prompt with predictable formatting and the requested action-item focus."
+
+[[tests]]
+name = "respects communication context"
+variable.brief = { outcome = "Write a status note", context = "Executive audience" }
+variable.council_context = { constraints = "Use neutral professional language" }
+expected_output = "Produces a compact prompt suited to executives and preserves the tone constraint."

@@ -1,13 +1,8 @@
-from pathlib import Path
 from typing import Any
 
 from .model_config import DEFAULT_MODEL
 from .models import BriefEnhancementResult
-from .prompt_ninja import PromptNinja
-
-BRIEF_ENHANCER_PROMPT_FILE = (
-    Path(__file__).resolve().parents[1] / "prompts" / "brief-enhancer.prompt.toml"
-)
+from .prompt_catalog import PROMPTS
 
 
 class BriefEnhancer:
@@ -15,14 +10,14 @@ class BriefEnhancer:
 
     def __init__(self, client: Any | None = None):
         self.client = client
-        self.prompt = PromptNinja.from_file(BRIEF_ENHANCER_PROMPT_FILE)
+        self.prompt = PROMPTS.brief_enhancer
 
     async def enhance(
         self,
         request_text: str,
         file_sources: list[dict[str, Any]],
     ) -> BriefEnhancementResult:
-        result = await self.prompt.run_openai(
+        result = await self.prompt.run_openrouter(
             {
                 "request_text": request_text,
                 "file_sources": file_sources,
