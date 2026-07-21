@@ -435,18 +435,23 @@ wheels = [
 
 [[package]]
 name = "prompt-ninja"
-version = "0.1.0"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
-    { name = "fastapi" },
     { name = "httpx" },
     { name = "openai" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "rich" },
+]
+
+[package.optional-dependencies]
+server = [
+    { name = "fastapi" },
     { name = "pypdf" },
     { name = "python-docx" },
-    { name = "python-dotenv" },
     { name = "python-multipart" },
-    { name = "rich" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -454,27 +459,31 @@ dependencies = [
 dev = [
     { name = "black" },
     { name = "httpx" },
+    { name = "prompt-ninja", extra = ["server"] },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = "==8.4.2" },
-    { name = "fastapi", specifier = "==0.115.6" },
-    { name = "httpx", specifier = "==0.28.1" },
+    { name = "click", specifier = ">=8.1,<9" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115,<1" },
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "openai", specifier = ">=2.0.0,<3.0.0" },
-    { name = "pypdf", specifier = "==5.1.0" },
-    { name = "python-docx", specifier = "==1.1.2" },
-    { name = "python-dotenv", specifier = "==1.2.1" },
-    { name = "python-multipart", specifier = "==0.0.20" },
-    { name = "rich", specifier = "==14.2.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = "==0.34.0" },
+    { name = "pydantic", specifier = ">=2.9,<3" },
+    { name = "pypdf", marker = "extra == 'server'", specifier = ">=5.1,<6" },
+    { name = "python-docx", marker = "extra == 'server'", specifier = ">=1.1,<2" },
+    { name = "python-dotenv", specifier = ">=1.0,<2" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.20,<1" },
+    { name = "rich", specifier = ">=13.7,<15" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.34,<1" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=26.5.1" },
     { name = "httpx", specifier = "==0.28.1" },
+    { name = "prompt-ninja", extras = ["server"], editable = "." },
     { name = "pytest", specifier = "==8.3.4" },
 ]
 

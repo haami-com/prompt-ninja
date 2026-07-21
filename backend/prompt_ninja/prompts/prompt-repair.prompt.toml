@@ -1,0 +1,87 @@
+[metadata]
+spec_version = "1.2"
+name = "prompt_repair"
+description = "Repairs a Prompt Ninja TOML artifact from its validation error."
+used_by = ["backend/prompt_ninja/cli.py"]
+version = "1.0.0"
+output = "String"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+Repair every TOML and Prompt Ninja validation error in the supplied prompt file
+while preserving the prompt's intent. Return only a complete, valid
+*.prompt.toml document without Markdown fences. Preserve
+metadata.spec_version = "1.2" and every required section.
+
+metadata.output must be String, BigInt, or an importable dotted path to a
+Pydantic BaseModel. If a broken model path cannot be verified, do not invent a
+replacement path; use String for text output or BigInt for one integer.
+"""
+
+user = """
+PROMPT FILE:
+{{prompt_toml}}
+
+VALIDATION ERROR:
+{{validation_error}}
+"""
+
+[[variables]]
+name = "prompt_toml"
+type = "string"
+description = "The complete invalid prompt TOML document."
+required = true
+
+[[variables]]
+name = "validation_error"
+type = "string"
+description = "The validation failure that must be repaired."
+required = true
+
+[[tests]]
+name = "repairs an invalid output model"
+variable.prompt_toml = '''[metadata]
+spec_version = "1.2"
+name = "sample"
+description = "A sample prompt."
+used_by = ["backend/prompt_ninja/example.py"]
+version = "1.0.0"
+output = "prompt_ninja.models.DoesNotExist"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+[prompt]
+user = "Summarize {{source}}."
+[[variables]]
+name = "source"
+type = "string"
+description = "Source material."
+required = true'''
+variable.validation_error = "metadata.output model 'prompt_ninja.models.DoesNotExist' could not be imported."
+expected_output = "Returns only valid Prompt Ninja TOML with output set to String while preserving the summary task and source variable."
+
+[[tests]]
+name = "repairs an undeclared template variable"
+variable.prompt_toml = '''[metadata]
+spec_version = "1.2"
+name = "greeting"
+description = "Greets a named person."
+used_by = ["backend/prompt_ninja/example.py"]
+version = "1.0.0"
+output = "String"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+[prompt]
+user = "Greet {{name}} using a {{tone}} tone."
+[[variables]]
+name = "name"
+type = "string"
+description = "Person to greet."
+required = true'''
+variable.validation_error = "prompt templates reference undeclared variable: tone"
+expected_output = "Returns only valid Prompt Ninja TOML with a declared tone variable while preserving the greeting task and existing name variable."

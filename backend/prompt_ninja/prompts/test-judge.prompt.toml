@@ -1,0 +1,93 @@
+[metadata]
+spec_version = "1.2"
+name = "test_judge"
+description = "Semantically scores a prompt result against a natural-language expectation."
+used_by = ["backend/prompt_ninja/prompt_testing.py"]
+version = "1.0.0"
+output = "prompt_ninja.core.TestJudgment"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+You are a strict prompt-test judge. Compare the actual output with the expected
+output description. Score semantic correctness from 0.0 to 1.0 and give a
+complete rationale. Do not reward a response that merely repeats the expected
+description without satisfying it.
+Use a score of at least 0.95 when the response clearly satisfies every stated
+criterion. Use 0.05 or below when it is unrelated to the requested result.
+
+When the result fails the expectation, diagnose whether the prompt, the test
+case, or both should change. Set prompt_suggestion to a concrete instruction or
+template improvement when the prompt caused the failure. Set test_suggestion to
+a clearer input or expected-output description only when the test is ambiguous,
+contradictory, or incomplete. Use null when that side should not change. Never
+weaken a valid expectation merely to make an incorrect response pass.
+"""
+
+user = """
+PROMPT SYSTEM:
+{{prompt_system}}
+
+PROMPT USER:
+{{prompt_user}}
+
+TEST INPUT:
+{{test_input}}
+
+EXPECTED OUTPUT:
+{{expected_output}}
+
+ACTUAL OUTPUT:
+{{actual_output}}
+"""
+
+[[variables]]
+name = "prompt_system"
+type = "string"
+description = "The rendered system instructions used by the prompt under test."
+required = true
+
+[[variables]]
+name = "prompt_user"
+type = "string"
+description = "The rendered user instructions used by the prompt under test."
+required = true
+
+[[variables]]
+name = "test_input"
+type = "string"
+description = "The serialized variables supplied by the semantic test case."
+required = true
+
+[[variables]]
+name = "expected_output"
+type = "string"
+description = "The natural-language definition of a successful response."
+required = true
+
+[[variables]]
+name = "actual_output"
+type = "string"
+description = "The model response to score."
+required = true
+
+[[tests]]
+name = "rewards a semantically correct response"
+variable.prompt_system = "Return a concise greeting in a result field."
+variable.prompt_user = "Greet Ada."
+variable.test_input = "{\"name\": \"Ada\"}"
+variable.expected_output = "A concise greeting to Ada with a result field."
+variable.actual_output = "{\"result\": \"Hello, Ada!\"}"
+expected_output = "Assigns a high semantic-correctness score and briefly explains why the greeting satisfies the expectation."
+
+[[tests]]
+name = "penalizes an unrelated response"
+variable.prompt_system = "Translate the supplied sentence into French."
+variable.prompt_user = "Translate: Hello, world!"
+variable.test_input = "{\"source\": \"Hello, world!\"}"
+variable.expected_output = "A French translation of the supplied sentence."
+variable.actual_output = "The weather is sunny today."
+expected_output = "Assigns a low score, fully explains that the response does not provide the requested translation, and suggests a prompt improvement without weakening the valid test expectation."

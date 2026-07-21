@@ -1,0 +1,26 @@
+[
+  {
+    "customer_tier": "standard",
+    "ticket_text": "I was charged twice for my March invoice. Can you refund the duplicate?"
+  },
+  {
+    "customer_tier": "standard",
+    "ticket_text": "Checkout has been failing intermittently since this morning."
+  },
+  {
+    "customer_tier": "enterprise",
+    "ticket_text": "A former employee still has admin access and downloaded our customer list last night."
+  },
+  {
+    "customer_tier": "enterprise",
+    "ticket_text": "The reporting dashboard takes about 40 seconds to load since yesterday. It is usable but slow for the whole finance team."
+  },
+  {
+    "customer_tier": "standard",
+    "ticket_text": "How do I invite a teammate to my workspace?"
+  },
+  {
+    "customer_tier": "standard",
+    "ticket_text": "This is the third time I am writing. Your product is terrible and I want a manager NOW."
+  }
+]

@@ -3,10 +3,10 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-import app.cli as cli_module
-from app.cli import cli
-from app.models import CouncilResult, PromptSpec
-from app.prompt_ninja import PromptNinja, PromptTestReport, PromptTestResult
+import prompt_ninja.cli as cli_module
+from prompt_ninja.cli import cli
+from prompt_ninja.models import AgentMessage, Brief, CouncilResult, PromptSpec
+from prompt_ninja import PromptNinja, PromptTestReport, PromptTestResult
 
 
 def test_generate_uses_goal_from_config_and_writes_valid_prompt(tmp_path, monkeypatch):
@@ -99,11 +99,139 @@ def test_generate_preserves_the_compiled_prompt_definition(tmp_path, monkeypatch
     ) == PromptNinja(definition).spec.model_dump(by_alias=True, exclude_none=True)
 
 
+def test_generate_writes_an_importable_pydantic_output_model(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    definition = {
+        "metadata": {
+            "spec_version": "1.2",
+            "name": "ticket-triage",
+            "description": "Classifies support tickets.",
+            "used_by": [],
+            "version": "1.0.0",
+            "output": "prompt_ninja.JsonObjectOutput",
+        },
+        "llm_model": {"provider": "openrouter", "name": "gpt-5.6-terra"},
+        "prompt": {"system": "Classify the ticket.", "user": "{{ticket}}"},
+        "variables": [
+            {
+                "name": "ticket",
+                "type": "string",
+                "description": "The support ticket.",
+                "required": True,
+            }
+        ],
+        "tests": [
+            {
+                "name": "classifies a billing ticket",
+                "variable": {"ticket": "I was charged twice."},
+                "expected_output": {
+                    "category": "billing",
+                    "needs_escalation": True,
+                },
+            }
+        ],
+    }
+
+    async def fake_generate(_):
+        return CouncilResult(
+            final_prompt="Classify the ticket.",
+            prompt_spec=PromptSpec(
+                goal="triage",
+                inputs=[],
+                output_contract="json",
+                constraints=[],
+                assumptions=[],
+            ),
+            prompt_definition=definition,
+            output_model={
+                "class_name": "TicketTriageOutput",
+                "fields": [
+                    {
+                        "name": "category",
+                        "type": "string",
+                        "description": "Assigned support category.",
+                    },
+                    {
+                        "name": "needs_escalation",
+                        "type": "boolean",
+                        "description": "Whether escalation is needed.",
+                    },
+                ],
+            },
+            agents=[],
+        )
+
+    monkeypatch.setattr(cli_module, "_generate", fake_generate)
+    output = Path("prompts/ticket-triage.prompt.toml")
+    result = CliRunner().invoke(
+        cli, ["generate", "--goal", "Triage support tickets", "--output", str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert Path("prompts/__init__.py").exists()
+    assert Path("prompts/ticket_triage_models.py").exists()
+    prompt = PromptNinja.from_file(output)
+    assert prompt.spec.metadata.used_by == []
+    assert (
+        prompt.spec.metadata.output
+        == "prompts.ticket_triage_models.TicketTriageOutput"
+    )
+    assert prompt.tests[0].expected_output == {
+        "category": "billing",
+        "needs_escalation": True,
+    }
+    assert prompt.output_model.model_validate(
+        {"category": "billing", "needs_escalation": True}
+    ).category == "billing"
+
+
+def test_generate_reports_board_progress(monkeypatch, capsys):
+    expected = CouncilResult(
+        final_prompt="Summarize the update.",
+        prompt_spec=PromptSpec(
+            goal="summary",
+            inputs=[],
+            output_contract="text",
+            constraints=[],
+            assumptions=[],
+        ),
+        agents=[],
+    )
+
+    class FakeCouncil:
+        async def stream(self, _brief):
+            yield AgentMessage(
+                stage="requirements",
+                agent="Requirements",
+                status="started",
+                title="Requirements analyst",
+            )
+            yield AgentMessage(
+                stage="requirements",
+                agent="Requirements",
+                status="complete",
+                title="Requirements analyst",
+                summary="Mapped the requested outcome.",
+            )
+            yield expected
+
+    monkeypatch.setattr(cli_module, "PromptCouncil", FakeCouncil)
+    result = asyncio.run(cli_module._generate(Brief(outcome="Summarize updates")))
+
+    assert result is expected
+    assert capsys.readouterr().out.splitlines() == [
+        "-> Requirements analyst",
+        "OK Requirements analyst - Mapped the requested outcome.",
+        "OK Board complete - prompt compiled and tested",
+    ]
+
+
 def test_cli_registers_requested_commands():
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    for command in ("generate", "test", "test-prompts", "update", "validate", "ui"):
+    for command in ("generate", "test", "test-prompts", "update", "validate"):
         assert command in result.output
+    assert "  ui " not in result.output
 
 
 def test_test_prompts_reports_prompt_without_embedded_cases(tmp_path):
@@ -245,16 +373,76 @@ expected_output = "A second result."
     assert "┏" not in result.output
 
 
+def test_failed_tests_show_full_reasoning_and_suggestions_without_verbose(
+    tmp_path, monkeypatch
+):
+    prompt = tmp_path / "failure-details.prompt.toml"
+    prompt.write_text("""[metadata]
+spec_version = "1.2"
+name = "failure-details"
+description = "Failure output fixture"
+used_by = ["backend/tests/test_cli.py"]
+version = "1.0.0"
+output = "String"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+[prompt]
+system = "Do work."
+""")
+    rationale = (
+        "The response omits the required launch date and uses internal terminology. "
+        "This final sentence must remain visible after the old truncation boundary."
+    )
+
+    async def fake_suite(prompts, _judge_model, show_progress=True):
+        return [
+            PromptTestReport(
+                prompt_name=prompts[0].name,
+                results=(
+                    PromptTestResult(
+                        name="customer-safe update",
+                        passed=False,
+                        expected="A customer-safe update preserving the date.",
+                        input={"release_notes": "Internal migration July 30."},
+                        actual="We are refactoring the gateway.",
+                        score=0.42,
+                        rationale=rationale,
+                        prompt_suggestion="Require dates and replace internal terminology.",
+                        test_suggestion="Add a second fixture containing an internal acronym.",
+                    ),
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(cli_module, "_run_prompt_test_suite", fake_suite)
+    for output_option in ([], ["--plain"]):
+        result = CliRunner().invoke(
+            cli,
+            ["test-prompts", "--prompts-dir", str(tmp_path), *output_option],
+        )
+
+        assert result.exit_code == 1
+        assert "The response omits the required launch date" in result.output
+        assert "old truncation boundary." in result.output
+        assert "suggested prompt change:" in result.output
+        assert "Require dates and replace internal terminology." in result.output
+        assert "suggested test change:" in result.output
+        assert "Add a second fixture containing an internal acronym." in result.output
+
+
 def test_prompt_test_suite_reuses_and_closes_one_openrouter_client(monkeypatch):
     class FakePromptClient:
         instances = []
 
         def __init__(self):
             self.closed = False
+            self.judge_users = []
             self.instances.append(self)
 
         async def execute(self, prompt, _prepared, runtime=None):
             if prompt.name == "test_judge":
+                self.judge_users.append(_prepared.user)
                 return {"score": 1.0, "rationale": "Matches the contract."}
             return "A correct summary."
 
@@ -300,7 +488,11 @@ def test_prompt_test_suite_reuses_and_closes_one_openrouter_client(monkeypatch):
 
     assert all(report.passed for report in reports)
     assert len(FakePromptClient.instances) == 1
-    assert FakePromptClient.instances[0].closed
+    prompt_client = FakePromptClient.instances[0]
+    assert prompt_client.closed
+    assert len(prompt_client.judge_users) == 2
+    assert "PROMPT USER:\nSummarize Launch notes." in prompt_client.judge_users[0]
+    assert 'TEST INPUT:\n{"source": "Launch notes"}' in prompt_client.judge_users[0]
 
 
 def test_validate_reports_valid_and_invalid_prompt_files(tmp_path):
@@ -341,7 +533,7 @@ name = "missing_model"
 description = "Has a missing output model"
 used_by = ["backend/tests/test_cli.py"]
 version = "1.0.0"
-output = "app.models.OutputModelThatDoesNotExist"
+output = "prompt_ninja.models.OutputModelThatDoesNotExist"
 [llm_model]
 provider = "openrouter"
 name = "google/gemini-2.5-flash"
@@ -353,8 +545,51 @@ system = "Do work."
 
     assert result.exit_code == 1
     assert "INVALID" in result.output
-    assert "app.models.OutputModelThatDoesNotExist" in result.output
+    assert "prompt_ninja.models.OutputModelThatDoesNotExist" in result.output
     assert "could not be imported" in result.output
+
+
+def test_repair_prompt_receives_the_artifact_and_validation_error(tmp_path):
+    prompt_file = tmp_path / "sample.prompt.toml"
+    original = """[metadata]
+spec_version = "1.2"
+name = "sample"
+description = "A sample prompt"
+used_by = ["backend/tests/test_cli.py"]
+version = "1.0.0"
+output = "String"
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+[prompt]
+system = "Do work."
+"""
+    prompt_file.write_text(original)
+    call = {}
+
+    class FakeRepairPrompt:
+        async def run_openrouter(self, variables, model):
+            call.update(variables=variables, model=model)
+            return original.replace("Do work.", "Return concise text.")
+
+    backup = asyncio.run(
+        cli_module._rewrite_prompt_file(
+            prompt_file,
+            FakeRepairPrompt(),
+            {"validation_error": "Example validation failure"},
+            "gpt-5.6-sol",
+        )
+    )
+
+    assert call["variables"] == {
+        "prompt_toml": original,
+        "validation_error": "Example validation failure",
+    }
+    assert call["model"] == "gpt-5.6-sol"
+    assert Path(backup).read_text() == original
+    assert (
+        PromptNinja.from_file(prompt_file).spec.prompt.system == "Return concise text."
+    )
 
 
 def test_validate_fix_repairs_a_missing_output_model(tmp_path, monkeypatch):
@@ -365,7 +600,7 @@ name = "missing_model"
 description = "Has a missing output model"
 used_by = ["backend/tests/test_cli.py"]
 version = "1.0.0"
-output = "app.models.OutputModelThatDoesNotExist"
+output = "prompt_ninja.models.OutputModelThatDoesNotExist"
 [llm_model]
 provider = "openrouter"
 name = "google/gemini-2.5-flash"
@@ -374,21 +609,21 @@ system = "Return a short text response."
 """)
     repair_call = {}
 
-    async def fake_repair(path, feedback, model):
-        repair_call.update(path=path, feedback=feedback, model=model)
+    async def fake_repair(path, validation_error, model):
+        repair_call.update(path=path, validation_error=validation_error, model=model)
         original = path.read_text()
         backup = path.with_suffix(path.suffix + ".bak")
         backup.write_text(original)
         path.write_text(
             original.replace(
-                'output = "app.models.OutputModelThatDoesNotExist"',
+                'output = "prompt_ninja.models.OutputModelThatDoesNotExist"',
                 'output = "String"',
             )
         )
         return str(backup)
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(cli_module, "_repair_prompt_file", fake_repair)
+    monkeypatch.setattr(cli_module, "_repair_invalid_prompt_file", fake_repair)
 
     result = CliRunner().invoke(
         cli,
@@ -399,6 +634,5 @@ system = "Return a short text response."
     assert "FIXED" in result.output
     assert repair_call["path"] == prompt_file
     assert repair_call["model"] == "gpt-5.6-sol"
-    assert "could not be imported" in repair_call["feedback"]
-    assert "do not invent a path" in repair_call["feedback"]
+    assert "could not be imported" in repair_call["validation_error"]
     assert PromptNinja.from_file(prompt_file).output_format == "text"

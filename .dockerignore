@@ -1,0 +1,17 @@
+.git
+.gitignore
+.DS_Store
+.env
+.env.*
+**/.DS_Store
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+backend/.venv
+backend/dist
+backend/tests
+frontend/node_modules
+frontend/dist
+npm-debug.log*

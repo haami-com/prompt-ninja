@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main_module
-from app.brief_enhancement import BriefEnhancer
-from app.main import app
-from app.models import BriefEnhancementResult
-from app.prompt_catalog import PROMPTS
+import prompt_ninja.main as main_module
+from prompt_ninja.brief_enhancement import BriefEnhancer
+from prompt_ninja.main import app
+from prompt_ninja.models import BriefEnhancementResult
+from prompt_ninja.prompt_catalog import PROMPTS
 
 
 def enhancement_result() -> BriefEnhancementResult:
@@ -165,3 +165,33 @@ def test_generate_labels_file_content_for_board_agents(monkeypatch):
     source_text = captured["brief"].source_text
     assert "[File #1: notes.txt]\nLaunch is Friday." in source_text
     assert "[File #2: owners.md]\nOwner: Priya" in source_text
+
+
+def test_generate_accepts_three_supported_creator_models(monkeypatch):
+    captured = {}
+
+    class FakeBoard:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def stream(self, _brief):
+            if False:
+                yield None
+
+    async def model_is_available(model):
+        return model in {"model/one", "model/two", "model/three", "model/judge"}
+
+    monkeypatch.setattr(main_module, "PromptCouncil", FakeBoard)
+    monkeypatch.setattr(main_module, "is_available_model", model_is_available)
+    response = TestClient(app).post(
+        "/api/generate",
+        data={
+            "outcome": "Create a concise project status update.",
+            "creator_models": '["model/one", "model/two", "model/three"]',
+            "judge_model": "model/judge",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["creator_models"] == ["model/one", "model/two", "model/three"]
+    assert captured["judge_model"] == "model/judge"

@@ -1,0 +1,58 @@
+[metadata]
+spec_version = "1.2"
+name = "brief-enhancer"
+description = "Turns a free-flow request and numbered reference files into an editable structured brief."
+used_by = ["backend/prompt_ninja/brief_enhancement.py"]
+version = "1.0.0"
+output = "prompt_ninja.models.BriefEnhancementResult"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+You are Prompt Ninja's intake editor. Transform a user's rough, free-flow
+request into a clear brief for a board of prompt-writing agents.
+
+Preserve the user's intent and concrete facts. Improve clarity, organization,
+and useful specificity, but never invent business context, requirements, file
+contents, or constraints. Keep exact labels such as "File #1" whenever the
+user refers to an uploaded file. Use the numbered file sources only to
+understand those references.
+
+Do not ask follow-up questions. The user will review and edit this brief before
+it is sent to the board.
+"""
+
+user = """
+FREE-FLOW REQUEST:
+{{request_text}}
+
+NUMBERED FILE SOURCES:
+{{file_sources}}
+"""
+
+[[variables]]
+name = "request_text"
+type = "string"
+description = "The user's original free-flow request."
+required = true
+
+[[variables]]
+name = "file_sources"
+type = "list[dict]"
+description = "Numbered reference-file contents supplied with the request."
+required = true
+
+[[tests]]
+name = "clarifies a rough request with referenced files"
+variable.request_text = "Use File #1 to write a launch update for leadership."
+variable.file_sources = [{ label = "File #1", name = "launch-notes.txt", content = "Launch is Friday." }]
+expected_output = "Produces a polished request, preserves the File #1 reference, and does not invent launch details."
+
+[[tests]]
+name = "handles a request without uploaded files"
+variable.request_text = "Create a concise weekly team update."
+variable.file_sources = []
+expected_output = "Returns a structured brief object that preserves the concise weekly team-update outcome, does not invent context, expected output, or constraints, and sets file_references to an empty list because no files were supplied."

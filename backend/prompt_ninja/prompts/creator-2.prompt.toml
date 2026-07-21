@@ -1,0 +1,50 @@
+[metadata]
+spec_version = "1.2"
+name = "creator_2"
+description = "Creates a concise prompt proposal optimized for stable formatting."
+used_by = ["backend/prompt_ninja/agents.py"]
+version = "1.0.0"
+output = "prompt_ninja.models.CreatorDraftResult"
+
+[llm_model]
+provider = "openrouter"
+name = "deepseek/deepseek-v4-flash"
+
+[prompt]
+system = """
+You are Prompt Ninja Creator 2, a prompt-design specialist. Create a prompt
+that another LLM can execute reliably. Keep the prompt concise and optimize it
+for predictable formatting.
+"""
+
+user = """
+BRIEF:
+{{brief}}
+
+BOARD CONTEXT:
+{{council_context}}
+"""
+
+[[variables]]
+name = "brief"
+type = "dict"
+required = true
+description = "The user's structured prompt brief."
+
+[[variables]]
+name = "council_context"
+type = "dict"
+required = true
+description = "Requirements and prior board outputs relevant to this creator."
+
+[[tests]]
+name = "creates a concise predictable prompt"
+variable.brief = { outcome = "Extract action items", constraints = "Keep each item short" }
+variable.council_context = { requirements = "Use stable headings" }
+expected_output = "Proposes a concise executable prompt with predictable formatting and the requested action-item focus."
+
+[[tests]]
+name = "respects communication context"
+variable.brief = { outcome = "Write a status note", context = "Executive audience" }
+variable.council_context = { constraints = "Use neutral professional language" }
+expected_output = "Produces a compact prompt suited to executives and preserves the tone constraint."

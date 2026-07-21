@@ -2,24 +2,24 @@ import asyncio
 
 import pytest
 
-from app.agents import (
-    CREATOR_PROMPT_FILES,
-    JUDGE_PROMPT_FILE,
-    REQUIREMENTS_PROMPT_FILE,
+from prompt_ninja.agents import (
     PromptCouncil,
     default_agent_instructions,
 )
-from app.main import app
-from app.models import Brief
-from app.prompt_catalog import PROMPTS
-from app.prompt_ninja import PromptNinja
+from prompt_ninja.main import app
+from prompt_ninja.models import Brief
+from prompt_ninja.prompt_catalog import PROMPTS
 from fastapi.testclient import TestClient
 
 
-def test_council_prompt_files_render_with_the_runtime_context():
+def test_council_prompts_render_with_the_runtime_context():
     brief = Brief(outcome="Create an accurate summary")
-    for path in (*CREATOR_PROMPT_FILES, JUDGE_PROMPT_FILE):
-        prompt = PromptNinja.from_file(path)
+    for prompt in (
+        PROMPTS.creator_1,
+        PROMPTS.creator_2,
+        PROMPTS.creator_3,
+        PROMPTS.judge,
+    ):
         prepared = prompt.prepare(
             {"brief": brief.model_dump(), "council_context": {"requirements": {}}}
         )
@@ -28,7 +28,7 @@ def test_council_prompt_files_render_with_the_runtime_context():
 
 
 def test_requirements_prompt_injects_array_valued_output_fields():
-    prompt = PromptNinja.from_file(REQUIREMENTS_PROMPT_FILE)
+    prompt = PROMPTS.requirements
     prepared = prompt.prepare({"brief": {}, "council_context": {}})
 
     properties = prompt.output_json_schema["properties"]
@@ -40,7 +40,7 @@ def test_requirements_prompt_injects_array_valued_output_fields():
 
 def test_council_uses_toml_defaults_and_allows_an_override():
     class FakePromptClient:
-        async def execute(self, _, prepared, runtime=None, output_model=None):
+        async def execute(self, _, prepared, runtime=None, output_model=None, hooks=()):
             return {"draft": "A proposal", "rationale": "A rationale"}
 
     council = PromptCouncil()
@@ -100,7 +100,7 @@ def test_council_passes_a_selected_model_as_a_prompt_runtime_override():
     runtimes = []
 
     class FakePromptClient:
-        async def execute(self, _, prepared, runtime=None, output_model=None):
+        async def execute(self, _, prepared, runtime=None, output_model=None, hooks=()):
             runtimes.append(runtime)
             return {"draft": "A proposal", "rationale": "A rationale"}
 
@@ -120,16 +120,21 @@ def test_council_passes_a_selected_model_as_a_prompt_runtime_override():
 
 def test_council_compiles_a_validated_definition_after_self_test_evidence():
     calls = []
+    hook_calls = {}
+
+    def sample_hook(_event):
+        return None
 
     class FakePromptClient:
-        async def execute(self, _, prepared, runtime=None, output_model=None):
+        async def execute(self, _, prepared, runtime=None, output_model=None, hooks=()):
             calls.append(prepared.name)
+            hook_calls[prepared.name] = hooks
             if prepared.name == "requirements":
                 return output_model.model_validate(
                     {
-                        "goal": "Create an accurate summary",
+                        "goal": "Classify a project update",
                         "inputs": [],
-                        "output_contract": "text",
+                        "output_contract": "json with category and needs_escalation",
                         "constraints": [],
                         "assumptions": [],
                         "risks": [],
@@ -145,13 +150,13 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
             if prepared.name == "test_case_generator":
                 return {
                     "input": "A project update.",
-                    "expected_output": "A concise summary.",
-                    "output_format": "text",
+                    "expected_output": "A matching category and escalation decision.",
+                    "output_format": "json",
                 }
             if prepared.name == "generated_prompt_under_test":
-                return "A concise summary."
+                return {"category": "status", "needs_escalation": False}
             if prepared.name == "project-summary":
-                return "A concise summary."
+                return {"category": "status", "needs_escalation": False}
             if prepared.name == "test_judge":
                 return {"score": 0.98, "rationale": "Matches the expectation."}
             if prepared.name == "prompt_compiler":
@@ -163,7 +168,7 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
                             "description": "Summarizes project updates.",
                             "used_by": ["backend/tests/test_council_prompts.py"],
                             "version": "1.0.0",
-                            "output": "String",
+                            "output": "prompt_ninja.JsonObjectOutput",
                         },
                         "llm_model": {
                             "provider": "openrouter",
@@ -181,7 +186,22 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
                                 "required": True,
                             }
                         ],
-                    }
+                    },
+                    "output_model": {
+                        "class_name": "ProjectUpdateClassification",
+                        "fields": [
+                            {
+                                "name": "category",
+                                "type": "string",
+                                "description": "The update category.",
+                            },
+                            {
+                                "name": "needs_escalation",
+                                "type": "boolean",
+                                "description": "Whether escalation is needed.",
+                            },
+                        ],
+                    },
                 }
             raise AssertionError("Unexpected prompt: %s" % prepared.name)
 
@@ -189,12 +209,13 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
         return [
             item
             async for item in council.stream(
-                Brief(outcome="Create an accurate summary")
+                Brief(outcome="Classify project updates into structured JSON")
             )
         ]
 
     council = PromptCouncil(
-        creator_models=["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"]
+        creator_models=["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"],
+        creator_1_hooks=(sample_hook,),
     )
     council.prompt_client = FakePromptClient()
     items = asyncio.run(collect_items(council))
@@ -208,18 +229,31 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
         "gpt-5.6-terra",
         "gpt-5.6-sol",
     ]
+    assert hook_calls["creator_1"] == (sample_hook,)
+    assert hook_calls["creator_2"] == ()
+    assert hook_calls["creator_3"] == ()
     assert result.prompt_definition["prompt"]["user"] == "{{input}}"
     assert result.prompt_test["passed"]
     assert result.prompt_definition["tests"] == [
         {
             "name": "Generated self-test fixture",
             "variable": {"input": "A project update."},
-            "expected_output": "A concise summary.",
+            "expected_output": {
+                "category": "status",
+                "needs_escalation": False,
+            },
         }
     ]
+    assert result.output_model["class_name"] == "ProjectUpdateClassification"
     assert stage_events.index(("synthesis", "complete")) < stage_events.index(
         ("validation", "started")
     )
+    synthesis = next(
+        item
+        for item in items
+        if getattr(item, "stage", None) == "synthesis" and item.status == "complete"
+    )
+    assert synthesis.payload["final_prompt"] == "Summarize the input."
     assert (
         calls.index("test_case_generator")
         < calls.index("generated_prompt_under_test")

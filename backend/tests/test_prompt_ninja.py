@@ -7,7 +7,7 @@ from pydantic import BaseModel, ValidationError
 
 import pytest
 
-from app.prompt_ninja import (
+from prompt_ninja import (
     BigIntOutput,
     JsonObjectOutput,
     PromptCollection,
@@ -19,7 +19,8 @@ from app.prompt_ninja import (
     PromptValidationError,
     SamplingRunHook,
 )
-from app.models import Person
+from prompt_ninja.models import Person
+from prompt_ninja.prompt_catalog import PROMPTS_DIRECTORY
 
 PROMPT = """
 [metadata]
@@ -28,7 +29,7 @@ name = "hello"
 description = "Greets a person"
 used_by = ["backend/tests/test_prompt_ninja.py"]
 version = "1.0.0"
-output = "app.prompt_ninja.JsonObjectOutput"
+output = "prompt_ninja.JsonObjectOutput"
 
 [llm_model]
 provider = "openrouter"
@@ -164,13 +165,13 @@ def test_system_overrides_render_the_prompt_variables(tmp_path):
     )
 
     assert prepared.system.startswith("Write a friendly greeting for Ada.\n\n")
-    assert "metadata.output = 'app.prompt_ninja.JsonObjectOutput'" in prepared.system
+    assert "metadata.output = 'prompt_ninja.JsonObjectOutput'" in prepared.system
 
 
 def test_pydantic_output_and_expected_output_are_enforced(tmp_path):
     prompt = PromptNinja.from_file(write_prompt(tmp_path))
     definition = prompt.spec.model_dump(by_alias=True, exclude_none=True)
-    definition["metadata"]["output"] = "app.models.GreetingResult"
+    definition["metadata"]["output"] = "prompt_ninja.models.GreetingResult"
     definition["tests"] = []
 
     with pytest.raises(ValidationError, match="result"):
@@ -227,7 +228,7 @@ def test_validation_resolves_declared_output_model_paths(tmp_path):
         by_alias=True,
         exclude_none=True,
     )
-    definition["metadata"]["output"] = "app.models.GreetingResult"
+    definition["metadata"]["output"] = "prompt_ninja.models.GreetingResult"
     definition["tests"] = []
 
     prompt = PromptNinja(definition)
@@ -241,12 +242,12 @@ def test_validation_rejects_missing_or_non_pydantic_output_models(tmp_path):
         exclude_none=True,
     )
     definition["tests"] = []
-    definition["metadata"]["output"] = "app.models.OutputModelThatDoesNotExist"
+    definition["metadata"]["output"] = "prompt_ninja.models.OutputModelThatDoesNotExist"
 
     with pytest.raises(PromptValidationError, match="could not be imported"):
         PromptNinja(definition)
 
-    definition["metadata"]["output"] = "app.models.DEFAULT_MODEL"
+    definition["metadata"]["output"] = "prompt_ninja.models.DEFAULT_MODEL"
     with pytest.raises(
         PromptValidationError, match="must resolve to a Pydantic BaseModel"
     ):
@@ -255,14 +256,14 @@ def test_validation_rejects_missing_or_non_pydantic_output_models(tmp_path):
 
 def test_validate_rechecks_a_mutated_output_model_path(tmp_path):
     prompt = PromptNinja.from_file(write_prompt(tmp_path))
-    prompt.definition["metadata"]["output"] = "app.models.OutputModelThatDoesNotExist"
+    prompt.definition["metadata"]["output"] = "prompt_ninja.models.OutputModelThatDoesNotExist"
 
     with pytest.raises(PromptValidationError, match="could not be imported"):
         prompt.validate()
 
 
 def test_included_prompt_file_has_a_passing_test():
-    path = Path(__file__).resolve().parents[1] / "prompts" / "greeting.prompt.toml"
+    path = PROMPTS_DIRECTORY / "greeting.prompt.toml"
     prompt = PromptNinja.from_file(path)
 
     async def executor(_):
@@ -282,7 +283,7 @@ def test_included_prompt_file_has_a_passing_test():
 
 
 def test_every_checked_in_prompt_has_two_semantic_test_cases():
-    prompts_directory = Path(__file__).resolve().parents[1] / "prompts"
+    prompts_directory = PROMPTS_DIRECTORY
 
     for path in sorted(prompts_directory.glob("*.prompt.toml")):
         prompt = PromptNinja.from_file(path)
@@ -291,7 +292,7 @@ def test_every_checked_in_prompt_has_two_semantic_test_cases():
 
 
 def test_validated_prompt_round_trips_through_toml_with_its_full_spec(tmp_path):
-    source = Path(__file__).resolve().parents[1] / "prompts" / "greeting.prompt.toml"
+    source = PROMPTS_DIRECTORY / "greeting.prompt.toml"
     original = PromptNinja.from_file(source)
     exported_path = tmp_path / "round-trip.prompt.toml"
     serialized = original.to_toml()
@@ -316,7 +317,7 @@ def test_toml_round_trip_preserves_every_variable_type_and_embedded_test(tmp_pat
             "description": "Exercises every variable type.",
             "used_by": ["backend/tests/test_prompt_ninja.py"],
             "version": "1.0.0",
-            "output": "app.prompt_ninja.JsonObjectOutput",
+            "output": "prompt_ninja.JsonObjectOutput",
         },
         "llm_model": {"provider": "openrouter", "name": "google/gemini-2.5-flash"},
         "prompt": {
@@ -445,7 +446,7 @@ required = true
 
 [[variables]]
 name = "person"
-type = "app.models.Person"
+type = "prompt_ninja.models.Person"
 description = "The person receiving the response."
 required = true
 
@@ -571,7 +572,7 @@ def test_async_execution_and_openai_adapter_use_the_prompt_contract(tmp_path):
         "Provide a friendly greeting.\n\n"
     )
     assert (
-        "metadata.output = 'app.prompt_ninja.JsonObjectOutput'"
+        "metadata.output = 'prompt_ninja.JsonObjectOutput'"
         in responses.request["instructions"]
     )
     assert responses.request["input"] == "Hello Ada. Enabled: True."
@@ -624,6 +625,36 @@ def test_installed_openai_compatible_client_exposes_the_responses_api():
     assert callable(client.responses.create)
 
 
+def test_owned_openrouter_client_configures_three_total_api_attempts(
+    tmp_path, monkeypatch
+):
+    import openai
+
+    constructor = {}
+
+    class FakeResponses:
+        async def create(self, **_):
+            return SimpleNamespace(
+                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}'
+            )
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            constructor.update(kwargs)
+            self.responses = FakeResponses()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeClient)
+    prompt = PromptNinja.from_file(write_prompt(tmp_path))
+
+    asyncio.run(prompt.run_openrouter({"name": "Ada"}))
+
+    assert constructor["max_retries"] == 2
+
+
 def test_openrouter_adapter_explains_when_a_client_lacks_responses_api(tmp_path):
     prompt = PromptNinja.from_file(write_prompt(tmp_path))
     client = SimpleNamespace()
@@ -642,7 +673,12 @@ def test_runtime_overrides_and_sampling_hooks_capture_a_complete_run(tmp_path):
         async def create(self, **request):
             self.request = request
             return SimpleNamespace(
-                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}'
+                output_text='{"result":"Hello, Ada!","meta":{"enabled":true}}',
+                usage=SimpleNamespace(
+                    input_tokens=120,
+                    output_tokens=30,
+                    total_tokens=150,
+                ),
             )
 
     responses = FakeResponses()
@@ -665,6 +701,9 @@ def test_runtime_overrides_and_sampling_hooks_capture_a_complete_run(tmp_path):
     assert [event.type for event in events] == ["request", "response"]
     assert events[0].user == "Hello Ada. Enabled: True."
     assert events[1].output.root["result"] == "Hello, Ada!"
+    assert events[1].input_tokens == 120
+    assert events[1].output_tokens == 30
+    assert events[1].total_tokens == 150
 
 
 def test_openrouter_client_can_return_a_typed_output_model(tmp_path):
@@ -688,6 +727,31 @@ def test_openrouter_client_can_return_a_typed_output_model(tmp_path):
     )
     assert isinstance(result, GreetingOutput)
     assert result.meta == {"enabled": True}
+
+
+def test_generic_json_output_avoids_provider_structured_schema(tmp_path):
+    prompt = PromptNinja.from_file(write_prompt(tmp_path))
+
+    class FakeResponses:
+        async def parse(self, **_request):
+            raise AssertionError(
+                "schema-less generic JSON must not use provider structured parsing"
+            )
+
+        async def create(self, **request):
+            self.request = request
+            return SimpleNamespace(output_text='{"category":"billing","severity":2}')
+
+    responses = FakeResponses()
+    result = asyncio.run(
+        prompt.run_openrouter(
+            {"name": "Ada"},
+            client=SimpleNamespace(responses=responses),
+        )
+    )
+
+    assert result.root == {"category": "billing", "severity": 2}
+    assert "text" not in responses.request
 
 
 def test_openrouter_client_prefers_responses_parse_for_a_typed_output_model(tmp_path):

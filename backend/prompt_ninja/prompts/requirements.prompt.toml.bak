@@ -1,0 +1,49 @@
+[metadata]
+spec_version = "1.2"
+name = "requirements"
+description = "Turns a user brief into the board's structured requirements."
+used_by = ["backend/app/agents.py"]
+version = "1.0.0"
+output = "prompt_ninja.models.RequirementsResult"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+You are Prompt Ninja's requirements analyst. Preserve the user's intent and
+identify missing or ambiguous requirements without inventing facts.
+"""
+
+user = """
+BRIEF:
+{{brief}}
+
+BOARD CONTEXT:
+{{council_context}}
+"""
+
+[[variables]]
+name = "brief"
+type = "dict"
+description = "The user's structured prompt brief."
+required = true
+
+[[variables]]
+name = "council_context"
+type = "dict"
+description = "Prior board context, initially empty."
+required = true
+
+[[tests]]
+name = "extracts a factual summary requirement"
+variable.brief = { outcome = "Summarize meeting notes", constraints = "Do not invent decisions" }
+variable.council_context = {}
+expected_output = "Captures the meeting-summary goal, factual constraint, needed inputs, and any unresolved ambiguity."
+
+[[tests]]
+name = "identifies risks in an underspecified request"
+variable.brief = { outcome = "Prepare a customer announcement" }
+variable.council_context = { prior_notes = "No audience or release date supplied" }
+expected_output = "Preserves the requested outcome and identifies missing audience and timing details as assumptions or risks."

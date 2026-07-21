@@ -1,0 +1,70 @@
+[metadata]
+spec_version = "1.2"
+name = "ticket-triage"
+description = "Classifies one inbound support ticket into a routing decision."
+used_by = ["examples/run_triage.py"]
+version = "1.0.0"
+output = "prompts.ticket_triage_models.TicketTriage"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+You classify one inbound support ticket so it can be routed automatically.
+
+Judge impact by the evidence in the ticket, not by how urgent the customer
+sounds. Frustration, threats to cancel, and requests for a manager are not by
+themselves reasons to escalate.
+
+Use `critical` only for a confirmed widespread outage, a security or privacy
+incident, or confirmed data loss. Use `high` when a core workflow is
+unavailable or has no practical workaround.
+
+Never invent an affected component. When the customer does not name a system,
+feature, or integration, return exactly `unknown`.
+"""
+
+user = """
+Ticket from {{customer_tier}} customer:
+
+{{ticket_text}}
+"""
+
+[[variables]]
+name = "ticket_text"
+type = "string"
+required = true
+description = "Full text of the inbound support ticket."
+
+[[variables]]
+name = "customer_tier"
+type = "string"
+required = false
+default = "standard"
+description = "Support plan for the reporting customer."
+
+[testing]
+pass_threshold = 0.9
+
+[[tests]]
+name = "routes a billing question without escalating"
+variable.ticket_text = "I was charged twice for my March invoice. Can you refund the duplicate?"
+expected_output = "A billing category with low or medium severity, escalation_needed false, and an affected component naming billing or invoicing."
+
+[[tests]]
+name = "never invents an affected component"
+variable.ticket_text = "Checkout has been failing intermittently since this morning."
+expected_output = "affected_component is exactly 'unknown' because the customer named no specific system, and the category is bug or performance."
+
+[[tests]]
+name = "escalates a confirmed security incident"
+variable.ticket_text = "A former employee still has admin access and downloaded our customer list last night."
+variable.customer_tier = "enterprise"
+expected_output = "A security category with critical severity and escalation_needed true."
+
+[[tests]]
+name = "does not escalate on tone alone"
+variable.ticket_text = "This is the third time I am writing. Your product is terrible and I want a manager NOW."
+expected_output = "escalation_needed is false because the ticket shows frustration but no concrete impact, security issue, or outage."

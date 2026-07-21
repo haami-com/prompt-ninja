@@ -1,14 +1,45 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 * { box-sizing: border-box; }
-body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; }
-.app-shell { min-height: 100vh; background: radial-gradient(circle at 80% 0%, #e9f1e8 0, #f7f8f5 34rem); }
-.upload-zone { border: 1px dashed rgba(78, 118, 94, .45); border-radius: 14px; background: rgba(255,255,255,.55); padding: 15px 16px; transition: all .2s ease; }
-.upload-zone:hover { border-color: #4e765e; background: #f3f7f2; }
-.agent-row { position: relative; padding: 8px 0 18px; }
-.agent-row:last-child { padding-bottom: 0; }
-.agent-line { width: 1px; height: 20px; position: absolute; left: 17px; top: 42px; background: #e4e9e4; }
+body { margin: 0; font-family: 'Space Grotesk', system-ui, sans-serif; }
+.app-shell { min-height: 100vh; position: relative; overflow: hidden; background: #f7f5f2; }
+.app-shell::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 760px; pointer-events: none; background: radial-gradient(circle at 76% 10%, rgba(15,159,146,.22), transparent 25rem), radial-gradient(circle at 14% 14%, rgba(241,91,42,.12), transparent 20rem), linear-gradient(rgba(23,19,31,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(23,19,31,.035) 1px, transparent 1px); background-size: auto, auto, 48px 48px, 48px 48px; mask-image: linear-gradient(to bottom, black 55%, transparent 100%); }
+.app-shell > * { position: relative; }
+.eyebrow { font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .12em; }
+.brand-mark { box-shadow: 0 7px 0 #0f9f92; transform: rotate(-2deg); }
+.nav-shell { border-bottom: 1px solid rgba(23,19,31,.14); padding-bottom: 22px; }
+.hero-copy { text-wrap: balance; }
+.hero-accent { position: relative; display: inline-block; color: #0f9f92; }
+.upload-zone { border: 1px dashed rgba(15,159,146,.48); border-radius: 10px; background: rgba(255,255,255,.62); padding: 15px 16px; transition: all .2s ease; }
+.upload-zone:hover { border-color: #0f9f92; background: #ecfdfb; transform: translateY(-1px); }
+.council-panel { position: relative; }
+.council-panel > div:nth-child(2) { border-radius: 12px !important; border-color: rgba(23,19,31,.16) !important; box-shadow: 8px 8px 0 rgba(15,159,146,.12) !important; }
+.chakra-button { transition: transform .18s ease, box-shadow .18s ease, background .18s ease !important; }
+.chakra-button:hover { transform: translateY(-2px); }
+.chakra-button[data-loading] { transform: none; }
+.chakra-textarea, .chakra-input, .chakra-select { border-radius: 9px !important; }
+.chakra-badge { font-family: 'JetBrains Mono', monospace; letter-spacing: -.02em; }
+.metric-card { padding: 22px; background: rgba(255,255,255,.82); border: 1px solid rgba(23,19,31,.14); border-radius: 12px; box-shadow: 5px 5px 0 rgba(15,159,146,.08); }
+.phase-label { margin: 22px 0 7px; padding-top: 18px; border-top: 1px solid #ece8f0; }
+.phase-label:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.phase-label > p { width: 28px; font: 600 10px/1 'JetBrains Mono', monospace; letter-spacing: .1em; color: #0f9f92; }
+.phase-label > div p:first-child { font-size: 12px; line-height: 1.2; color: #17131f; }
+.phase-label > div p:last-child { margin-top: 2px; font-size: 11px; line-height: 1.3; color: #8a8296; }
+.agent-row { position: relative; margin-left: 40px; padding: 14px 0; }
+.agent-row + .agent-row { border-top: 1px solid #f0edf2; }
+.agent-model { margin-top: 3px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 10px/1.4 'JetBrains Mono', monospace; color: #0f9f92; }
+.agent-actions { flex-shrink: 0; }
 .agent-row.is-active svg { animation: spin 1.3s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 textarea, input { font-family: inherit !important; }
 
+@media (max-width: 62em) {
+  .app-shell::before { height: 560px; background-size: auto, auto, 36px 36px, 36px 36px; }
+  .council-panel { margin-top: 28px; }
+}
+
+@media (max-width: 36em) {
+  .agent-row { margin-left: 0; }
+  .agent-heading { flex-direction: column; }
+  .agent-actions { margin-left: -8px; }
+}

@@ -1,0 +1,74 @@
+[metadata]
+spec_version = "1.2"
+name = "sampled_run_judge"
+description = "Scores a sampled production prompt run against its rendered instructions."
+used_by = ["backend/prompt_ninja/hooks/sampled_eval.py"]
+version = "1.0.0"
+output = "prompt_ninja.core.TestJudgment"
+
+[llm_model]
+provider = "openrouter"
+name = "openai/gpt-5.6-terra"
+
+[prompt]
+system = """
+You evaluate one completed LLM call. Rate how well the output follows both the
+rendered system prompt and the rendered user input. Return a score from 0.0 to
+1.0, where 0.0 is unusable or contradictory and 1.0 fully satisfies the
+instructions. Judge only the supplied evidence. Give a concise rationale and
+do not include hidden chain-of-thought.
+"""
+
+user = """
+PROMPT NAME:
+{{prompt_name}}
+
+SYSTEM PROMPT:
+{{system_prompt}}
+
+INPUT:
+{{input}}
+
+OUTPUT:
+{{output}}
+"""
+
+[[variables]]
+name = "prompt_name"
+type = "string"
+description = "Name of the prompt that produced the sampled response."
+required = true
+
+[[variables]]
+name = "system_prompt"
+type = "string"
+description = "Fully rendered system prompt used for the call."
+required = true
+
+[[variables]]
+name = "input"
+type = "string"
+description = "Fully rendered user input used for the call."
+required = true
+
+[[variables]]
+name = "output"
+type = "string"
+description = "Serialized output returned by the model."
+required = true
+
+[[tests]]
+name = "scores a faithful summary highly"
+variable.prompt_name = "weekly-summary"
+variable.system_prompt = "Summarize the update in one factual sentence."
+variable.input = "Launch moved to Friday and Priya owns the checklist."
+variable.output = "The launch moved to Friday, with Priya owning the checklist."
+expected_output = "Returns a high 0-to-1 score with a concise rationale because the output follows the prompt and preserves both facts."
+
+[[tests]]
+name = "scores an invented answer poorly"
+variable.prompt_name = "invoice-extractor"
+variable.system_prompt = "Extract only totals explicitly present in the input."
+variable.input = "Invoice status: pending."
+variable.output = "The invoice total is $4,200."
+expected_output = "Returns a low 0-to-1 score with a concise rationale because the output invents a total absent from the input."

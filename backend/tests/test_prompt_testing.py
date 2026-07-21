@@ -1,10 +1,10 @@
 import asyncio
 from types import SimpleNamespace
 
-from app.models import GeneratedPromptTestRequest
-from app.main import app
-from app.prompt_catalog import PROMPTS
-from app.prompt_testing import PromptTestHarness
+from prompt_ninja.models import GeneratedPromptTestRequest
+from prompt_ninja.main import app
+from prompt_ninja.prompt_catalog import PROMPTS
+from prompt_ninja.prompt_testing import PromptTestHarness
 from fastapi.testclient import TestClient
 
 
@@ -75,7 +75,7 @@ def test_harness_executes_the_canonical_definition_with_type_correct_fixture_val
             "description": "Summarizes notes.",
             "used_by": ["backend/tests/test_prompt_testing.py"],
             "version": "1.0.0",
-            "output": "app.prompt_ninja.JsonObjectOutput",
+            "output": "prompt_ninja.JsonObjectOutput",
         },
         "llm_model": {"provider": "openrouter", "name": "google/gemini-2.5-flash"},
         "prompt": {
