@@ -48,6 +48,51 @@ Three ways to use the result:
 
 ---
 
+# Quick start
+
+Three ways to try it before installing anything:
+
+| Way | What it gives you |
+| --- | --- |
+| **[prompt-ninja.fly.dev](https://prompt-ninja.fly.dev)** | The full Board of Prompts UI, hosted — nothing to install |
+| **[Colab notebook](https://colab.research.google.com/drive/18nBY0PSPk9RYa04Eejsc8MXA_8AvwSY2?usp=sharing)** | The CLI and Python API in a disposable Python runtime |
+| `uv add prompt-ninja` / `pip install prompt-ninja` | The CLI and Python API in your own project — see Option B below |
+
+## Try the web app
+
+Open **[prompt-ninja.fly.dev](https://prompt-ninja.fly.dev)**. On the **Board**
+page, describe an outcome — for example, "Turn release notes into a concise
+customer update" — and run it. Expect to watch each Board of Prompts stage
+complete live: requirements, three creators drafting in parallel, the judge
+synthesizing a final prompt, then validation and compilation; a full run
+typically finishes in under a minute. Afterward, the **Hooks** page shows the
+judge's scores, rationale, token counts, and cost estimate for that run. It's a
+shared demo instance — there's no API key to configure on your end, but avoid
+pasting sensitive data into it.
+
+## Try the Colab notebook
+
+**[Open the notebook](https://colab.research.google.com/drive/18nBY0PSPk9RYa04Eejsc8MXA_8AvwSY2?usp=sharing)**
+and run its cells top to bottom — an `OPENROUTER_API_KEY` is already configured
+in the notebook, so there's nothing to paste in:
+
+1. The first cell installs `prompt-ninja`.
+2. The `generate` cell turns a plain-language goal into a versioned
+   `*.prompt.toml` artifact. Expect this to be the slowest cell — it runs the
+   full Board of Prompts.
+3. The remaining cells validate the artifact, run its semantic tests, and load
+   it in Python. Each finishes in a few seconds once the artifact exists.
+
+Generated a prompt in the web app or the notebook and want to keep iterating on
+it locally? Save the `*.prompt.toml` file into a project (install the CLI
+below), then pick up at
+[Add or change expectations](#2-add-or-change-expectations) to add a test case,
+or [Update the prompt from feedback](#5-update-the-prompt-from-feedback) to
+revise it from a plain-language note — both work on any artifact, not just one
+generated locally.
+
+---
+
 # Setup
 
 ## Requirements
@@ -92,8 +137,13 @@ uv run --no-editable prompt-ninja --help
 ## Option B — install the package into your own project
 
 ```bash
-pip install prompt-ninja          # CLI + Python API
+pip install prompt-ninja            # CLI + Python API
 pip install 'prompt-ninja[server]'  # adds the FastAPI Board of Prompts backend
+
+# or, with uv:
+uv add prompt-ninja
+uv add 'prompt-ninja[server]'
+
 export OPENROUTER_API_KEY=your-key
 ```
 
@@ -135,18 +185,18 @@ injected as fake executors. See
 # Try it with the included sample
 
 [`examples/`](examples/) contains a ready-made artifact so you can see the
-format and the workflow without generating anything first: a support-ticket
-triage prompt, its Pydantic output contract, and six sample tickets.
+format and the workflow without generating anything first: **pull the fields an
+expense report needs out of a receipt.**
 
 | File | What it is |
 | --- | --- |
-| [`examples/prompts/ticket-triage.prompt.toml`](examples/prompts/ticket-triage.prompt.toml) | The artifact: instructions, model, typed inputs, output contract, and four semantic tests |
-| [`examples/prompts/ticket_triage_models.py`](examples/prompts/ticket_triage_models.py) | The Pydantic model every response must validate against |
-| [`examples/sample-tickets.json`](examples/sample-tickets.json) | Six sample tickets, including two designed to be tempting to misclassify |
-| [`examples/run_triage.py`](examples/run_triage.py) | Loads the artifact and classifies all six |
+| [`examples/prompts/receipt-extract.prompt.toml`](examples/prompts/receipt-extract.prompt.toml) | The artifact: instructions, model, typed inputs, output contract, and four semantic tests |
+| [`examples/prompts/receipt_models.py`](examples/prompts/receipt_models.py) | The Pydantic model every response must validate against |
+| [`examples/sample-receipts.json`](examples/sample-receipts.json) | Six receipts — coffee, deli, market, parking, hotel, taxi |
+| [`examples/run_receipts.py`](examples/run_receipts.py) | Loads the artifact and extracts all six |
 
 Run these from the `examples/` directory, so the artifact's
-`prompts.ticket_triage_models.TicketTriage` output path is importable:
+`prompts.receipt_models.Receipt` output path is importable:
 
 ```bash
 cd examples
@@ -158,37 +208,45 @@ the output model actually imports:
 
 ```bash
 prompt-ninja validate prompts
-# VALID prompts/ticket-triage.prompt.toml
+# VALID prompts/receipt-extract.prompt.toml
 ```
 
 **Run the semantic tests.** These call the model and score each response
 against a natural-language expectation (requires `OPENROUTER_API_KEY`):
 
 ```bash
-prompt-ninja test --prompt prompts/ticket-triage.prompt.toml --verbose
+prompt-ninja test --prompt prompts/receipt-extract.prompt.toml --verbose
 ```
 
-Two of the four cases exist to pin down failures that are easy to regress into:
+Extraction is easy; **knowing when to say nothing is the hard part.** Three of
+the four tests exist only to pin that down:
 
-- `never invents an affected component` — the ticket names no system, so
-  `affected_component` must be exactly `unknown` rather than a plausible guess.
-- `does not escalate on tone alone` — an angry ticket with no concrete impact
-  must not escalate. Severity should track evidence, not volume.
+- `never invents card digits` — the receipt was paid in cash, so
+  `payment_last4` must be null rather than four plausible numbers.
+- `never computes a missing tax` — no tax line is printed, so `tax` must be
+  null. It must not be worked out from the total.
+- `leaves the date null when the receipt has none` — a parking stub with no
+  date gets no date.
 
-**Classify the sample tickets from Python:**
+An invented value is worse than a blank one, because someone files these as
+expenses. That is a behavioral requirement, not a wording preference, which is
+exactly the kind of thing that belongs in a test rather than in your memory.
+
+**Extract from the sample receipts in Python:**
 
 ```bash
-python run_triage.py
+python run_receipts.py
 ```
 
-Each `result` comes back as a validated `TicketTriage` instance, not raw JSON —
-a malformed response, a bad enum value, or a missing field fails at the
-contract boundary instead of reaching your code.
+Each `result` comes back as a validated `Receipt` instance, not raw JSON — a
+malformed response, a non-numeric total, or an unparseable date fails at the
+contract boundary instead of reaching your expense system.
 
-**Then change something and watch a test catch it.** Delete the
-"Never invent an affected component" paragraph from the `[prompt]` system block
-and re-run `prompt-ninja test`. That is the whole point of the format: the
-expectation survives the edit.
+**Then break it on purpose.** Replace the "Do not calculate, infer, or
+complete them" paragraph in the `[prompt]` system block with "Fill in every
+field so the expense report is complete", and re-run `prompt-ninja test`. The
+tests catch it. That is the whole point of the format: the expectation survives
+the edit.
 
 ---
 
@@ -436,14 +494,17 @@ configures port `8080`, HTTPS, automatic machine start/stop, and `/health`
 checks.
 
 Fly app names are globally unique. Change the `app` value in `fly.toml` if
-`prompt-ninja-haami` is unavailable, then create the app, set the provider key,
-and deploy from the repository root:
+`prompt-ninja` is unavailable, then create the app, set the provider key, and
+deploy from the repository root:
 
 ```bash
-fly apps create prompt-ninja-haami
+fly apps create prompt-ninja
 fly secrets set OPENROUTER_API_KEY=your-key
 fly deploy
 ```
+
+The hosted instance at [prompt-ninja.fly.dev](https://prompt-ninja.fly.dev)
+runs exactly this.
 
 The secret is stored by Fly and is not built into the image. To verify the
 same image locally:

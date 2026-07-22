@@ -436,14 +436,17 @@ configures port `8080`, HTTPS, automatic machine start/stop, and `/health`
 checks.
 
 Fly app names are globally unique. Change the `app` value in `fly.toml` if
-`prompt-ninja-haami` is unavailable, then create the app, set the provider key,
-and deploy from the repository root:
+`prompt-ninja` is unavailable, then create the app, set the provider key, and
+deploy from the repository root:
 
 ```bash
-fly apps create prompt-ninja-haami
+fly apps create prompt-ninja
 fly secrets set OPENROUTER_API_KEY=your-key
 fly deploy
 ```
+
+The hosted instance at [prompt-ninja.fly.dev](https://prompt-ninja.fly.dev)
+runs exactly this.
 
 The secret is stored by Fly and is not built into the image. To verify the
 same image locally:

@@ -1,0 +1,21 @@
+[
+  {
+    "receipt_text": "BLUE BOTTLE COFFEE\n123 Main St\n\n07/18/2026\n\nLatte                5.50\nCroissant            4.25\nTax                  0.83\n-------------------------\nTOTAL               10.58\nVISA ****4471\n"
+  },
+  {
+    "receipt_text": "CORNER DELI\n07/19/2026\n\nSandwich             8.00\n-------------------------\nTOTAL                8.00\nCASH\n"
+  },
+  {
+    "receipt_text": "FARMERS MARKET STALL 12\n07/20/2026\n\nApples               6.00\nBread                4.00\n-------------------------\nTOTAL               10.00\n"
+  },
+  {
+    "receipt_text": "PARKING GARAGE\nSpace 42\n\nTOTAL               12.00\nMASTERCARD ****8802\n"
+  },
+  {
+    "receipt_text": "HOTEL ARGONAUT\nFolio 88213\n\n07/15/2026 - 07/17/2026\n\nRoom  2 nights     420.00\nCity tax            37.80\n-------------------------\nTOTAL              457.80\nAMEX ****1009\n"
+  },
+  {
+    "receipt_text": "TAXI RECEIPT\n\nFare                18.40\nTip                  3.60\n-------------------------\nTOTAL               22.00\n",
+    "currency": "EUR"
+  }
+]

@@ -1,4 +1,4 @@
-app = "prompt-ninja-haami"
+app = "prompt-ninja"
 primary_region = "iad"
 
 [build]

@@ -1,6 +1,6 @@
 [project]
 name = "prompt-ninja"
-version = "1.0.1"
+version = "1.0.3"
 description = "Version, validate, and regression-test LLM prompts as software artifacts"
 readme = "README.md"
 license = "MIT"

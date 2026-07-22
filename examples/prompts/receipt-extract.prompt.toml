@@ -1,0 +1,103 @@
+[metadata]
+spec_version = "1.2"
+name = "receipt-extract"
+description = "Extracts expense fields from the text of a single receipt."
+used_by = ["examples/run_receipts.py"]
+version = "1.0.0"
+output = "prompts.receipt_models.Receipt"
+
+[llm_model]
+provider = "openrouter"
+name = "google/gemini-2.5-flash"
+
+[prompt]
+system = """
+You read the text of one receipt and pull out the fields an expense report
+needs.
+
+Copy values from the receipt. Do not calculate, infer, or complete them.
+
+If the receipt does not print a value, return null for that field. A missing
+tax line does not mean zero tax, and it does not mean you should work the tax
+out from the total. A receipt paid in cash has no card digits. A receipt with
+no date has no date.
+
+Returning null is always better than returning a plausible guess. Someone will
+file these as expenses, and an invented number is worse than a blank one.
+"""
+
+user = """
+Receipt text (amounts are in {{currency}}):
+
+{{receipt_text}}
+"""
+
+[[variables]]
+name = "receipt_text"
+type = "string"
+required = true
+description = "Raw text of one receipt, as printed or scanned."
+
+[[variables]]
+name = "currency"
+type = "string"
+required = false
+default = "USD"
+description = "Currency the receipt amounts are denominated in."
+
+[testing]
+pass_threshold = 0.9
+
+[[tests]]
+name = "extracts a straightforward card receipt"
+variable.receipt_text = """
+BLUE BOTTLE COFFEE
+123 Main St
+
+07/18/2026
+
+Latte                5.50
+Croissant            4.25
+Tax                  0.83
+-------------------------
+TOTAL               10.58
+VISA ****4471
+"""
+expected_output = "merchant Blue Bottle Coffee, purchase_date 2026-07-18, total 10.58, tax 0.83, and payment_last4 4471."
+
+[[tests]]
+name = "never invents card digits"
+variable.receipt_text = """
+CORNER DELI
+07/19/2026
+
+Sandwich             8.00
+-------------------------
+TOTAL                8.00
+CASH
+"""
+expected_output = "payment_last4 is null, because the receipt was paid in cash and shows no card digits."
+
+[[tests]]
+name = "never computes a missing tax"
+variable.receipt_text = """
+FARMERS MARKET STALL 12
+07/20/2026
+
+Apples               6.00
+Bread                4.00
+-------------------------
+TOTAL               10.00
+"""
+expected_output = "tax is null, because no tax line is printed. It must not be derived from the total."
+
+[[tests]]
+name = "leaves the date null when the receipt has none"
+variable.receipt_text = """
+PARKING GARAGE
+Space 42
+
+TOTAL               12.00
+MASTERCARD ****8802
+"""
+expected_output = "purchase_date is null, because the receipt prints no date. total is 12.00 and payment_last4 is 8802."

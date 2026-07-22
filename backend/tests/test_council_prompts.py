@@ -260,7 +260,8 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
         < calls.index("test_judge")
         < calls.index("prompt_compiler")
     )
-    assert calls[-3:] == ["test_case_generator", "project-summary", "test_judge"]
+    assert calls[-2:] == ["project-summary", "test_judge"]
+    assert calls.count("test_case_generator") == 1
 
 
 def test_toml_judge_requires_provider_access(monkeypatch):

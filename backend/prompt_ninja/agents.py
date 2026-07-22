@@ -27,6 +27,7 @@ from .prompt_compiler import (
     CompiledOutputModel,
     CompiledPromptResult,
     build_compiled_output_model,
+    reconcile_variable_casing,
 )
 from .prompt_testing import PromptTestHarness, fixture_values_for_prompt
 
@@ -252,7 +253,6 @@ class PromptCouncil:
                 context=brief.context,
                 expected_output=brief.expected_output,
                 model=self.judge_model,
-                judge_model=self.judge_model,
             )
         )
         compiled, compiler_prompt = await self.run_prompt(
@@ -264,10 +264,9 @@ class PromptCouncil:
                 "candidate_prompt": judged["final_prompt"],
                 "test_result": candidate_test.model_dump(),
             },
-            model=self.judge_model,
         )
         compiled_prompt = PromptNinja(
-            compiled["definition"],
+            reconcile_variable_casing(compiled["definition"]),
             source="<board compiler>",
         )
         expected_output: str | dict = candidate_test.expected_output
@@ -301,14 +300,17 @@ class PromptCouncil:
                 context=brief.context,
                 expected_output=brief.expected_output,
                 model=self.judge_model,
-                judge_model=self.judge_model,
                 definition=compiled_prompt.spec.model_dump(
                     by_alias=True, exclude_none=True
                 ),
-            )
+            ),
+            reuse_fixture={
+                "input": candidate_test.input,
+                "expected_output": candidate_test.expected_output,
+            },
         )
         prompt_trace["compiler"] = {
-            "model": self.judge_model,
+            "model": self.compiler_prompt_spec.spec.model.name,
             "system_prompt": compiler_prompt.system,
             "input_context": compiler_prompt.user,
         }

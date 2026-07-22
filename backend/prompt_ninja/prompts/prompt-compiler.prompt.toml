@@ -19,6 +19,9 @@ template placeholder used in either template, with the correct Prompt Ninja type
 required flag, and any safe default. Preserve the proposal's intent while using
 the test evidence to make the prompt executable. Use provider "openrouter" and the
 requested model.
+Variable names must be lower_snake_case, and every declared name must appear in
+the template as a placeholder with that exact same casing — never declare a
+variable in one case and reference it in the template with different casing.
 Do not include variable defaults. Defaults cannot be represented safely in the
 compiler's strict structured-output boundary and can be added after export.
 metadata.used_by must contain repository-relative consumer file paths with a file

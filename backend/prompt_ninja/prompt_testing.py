@@ -85,24 +85,34 @@ class PromptTestHarness:
         return result.model_dump() if isinstance(result, BaseModel) else result
 
     async def run(
-        self, request: GeneratedPromptTestRequest
+        self,
+        request: GeneratedPromptTestRequest,
+        *,
+        reuse_fixture: dict[str, Any] | None = None,
     ) -> GeneratedPromptTestResult:
+        """Run the harness. Pass `reuse_fixture` (an earlier run's input/expected_output)
+        to skip generating a new synthetic case, e.g. when re-testing a compiled prompt
+        against the exact same case its candidate was already validated against."""
         if self.prompt_client is None:
             raise RuntimeError(
                 "OPENROUTER_API_KEY is required to run generated-prompt tests."
             )
-        fixture = await self._run_prompt(
-            self.fixture_generator,
-            {
-                "goal": request.goal,
-                "context": request.context,
-                "user_expectation": request.expected_output,
-            },
-            self.fixture_generator.spec.model.name,
-        )
-        fixture_output_format = fixture["output_format"]
-        if fixture_output_format not in {"text", "json"}:
-            raise ValueError("Test fixture output_format must be 'text' or 'json'.")
+        if reuse_fixture is not None:
+            fixture = reuse_fixture
+            fixture_output_format = fixture.get("output_format", "text")
+        else:
+            fixture = await self._run_prompt(
+                self.fixture_generator,
+                {
+                    "goal": request.goal,
+                    "context": request.context,
+                    "user_expectation": request.expected_output,
+                },
+                self.fixture_generator.spec.model.name,
+            )
+            fixture_output_format = fixture["output_format"]
+            if fixture_output_format not in {"text", "json"}:
+                raise ValueError("Test fixture output_format must be 'text' or 'json'.")
         if request.definition is not None:
             generated_prompt = PromptNinja(
                 request.definition, source="<generated prompt test>"

@@ -1,6 +1,7 @@
 """Typed structured-output model for the board's prompt compiler."""
 
 import keyword
+import re
 from datetime import date, datetime
 from typing import Any, Literal
 
@@ -165,3 +166,45 @@ class CompiledPromptResult(BaseModel):
             variables.append(variable)
         definition["variables"] = variables
         return definition
+
+
+_VARIABLE_TOKEN_PATTERN = re.compile(
+    r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(\s*\|\s*[A-Za-z_][A-Za-z0-9_]*)?\s*\}\}"
+)
+
+
+def reconcile_variable_casing(definition: dict[str, Any]) -> dict[str, Any]:
+    """Repair template references that differ from their declaration only by case.
+
+    The compiler model occasionally declares a variable in one case (e.g.
+    RELEASE_NOTES) while its own template references the same variable in
+    another (release_notes). Prompt Ninja variable names are case-sensitive, so
+    that bare mismatch fails validation even though the intent is unambiguous;
+    conform the template to the declared name whenever they differ only by case.
+    """
+    variables = definition.get("variables")
+    prompt = definition.get("prompt")
+    if not isinstance(variables, list) or not isinstance(prompt, dict):
+        return definition
+    declared_names = [
+        variable["name"]
+        for variable in variables
+        if isinstance(variable, dict) and isinstance(variable.get("name"), str)
+    ]
+
+    def fix_case(template: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            token_name = match.group(1)
+            for declared in declared_names:
+                if declared != token_name and declared.casefold() == token_name.casefold():
+                    return match.group(0).replace(token_name, declared, 1)
+            return match.group(0)
+
+        return _VARIABLE_TOKEN_PATTERN.sub(replace, template)
+
+    fixed_prompt = dict(prompt)
+    for field in ("system", "user"):
+        value = fixed_prompt.get(field)
+        if isinstance(value, str):
+            fixed_prompt[field] = fix_case(value)
+    return {**definition, "prompt": fixed_prompt}
