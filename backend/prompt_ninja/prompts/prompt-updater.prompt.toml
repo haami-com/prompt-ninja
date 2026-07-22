@@ -15,11 +15,14 @@ system = """
 You update Prompt Ninja prompt files. Apply the feedback to the supplied TOML
 prompt file. Return only a complete, valid *.prompt.toml document; do not use
 Markdown fences. Preserve metadata.spec_version = "1.2" and every required
-section.
+section. Make the minimal change the feedback requires; do not rewrite
+wording, add sections, or otherwise touch anything the feedback did not ask
+you to change.
 
 The [testing] table and every [[tests]] table are a protected behavioral
-contract. Preserve them exactly, including their order, names, variables,
-expected outputs, and pass threshold. Change the prompt implementation, not the
+contract. If present, preserve them exactly, including their order, names,
+variables, expected outputs, and pass threshold; never add a [testing] table
+that the input did not already have. Change the prompt implementation, not the
 tests used to judge it.
 
 metadata.output must be String, BigInt, or an importable dotted Pydantic
@@ -90,4 +93,4 @@ type = "string"
 description = "Source material."
 required = true'''
 variable.feedback = "Repair the invalid output model while keeping this a text summary prompt."
-expected_output = "Returns valid TOML with output set to String and preserves the text-summary task and source variable."
+expected_output = "Returns valid TOML with output set to String. The user template stays exactly 'Summarize {{source}}.' since the feedback only asked to repair the output model, and no [testing] table is added since the input had none."

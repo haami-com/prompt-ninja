@@ -111,8 +111,11 @@ class PromptTestHarness:
                 self.fixture_generator.spec.model.name,
             )
             fixture_output_format = fixture["output_format"]
-            if fixture_output_format not in {"text", "json"}:
-                raise ValueError("Test fixture output_format must be 'text' or 'json'.")
+            if fixture_output_format not in {"text", "json_object", "json_array"}:
+                raise ValueError(
+                    "Test fixture output_format must be 'text', 'json_object', "
+                    "or 'json_array'."
+                )
         if request.definition is not None:
             generated_prompt = PromptNinja(
                 request.definition, source="<generated prompt test>"
@@ -130,11 +133,11 @@ class PromptTestHarness:
                         "description": "The in-memory prompt produced by the Board of Prompts.",
                         "used_by": ["backend/prompt_ninja/prompt_testing.py"],
                         "version": "1.0.0",
-                        "output": (
-                            "String"
-                            if fixture_output_format == "text"
-                            else "prompt_ninja.JsonObjectOutput"
-                        ),
+                        "output": {
+                            "text": "String",
+                            "json_object": "prompt_ninja.JsonObjectOutput",
+                            "json_array": "prompt_ninja.JsonArrayOutput",
+                        }[fixture_output_format],
                     },
                     "llm_model": {"provider": "openrouter", "name": request.model},
                     "prompt": {"system": request.final_prompt, "user": "{{input}}"},

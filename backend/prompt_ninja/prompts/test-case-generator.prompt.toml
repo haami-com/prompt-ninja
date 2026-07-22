@@ -17,7 +17,13 @@ source input must be material or a user message that the generated prompt should
 process. The expected output must describe what a correct response should
 contain, not prescribe its exact wording.
 Set output_format to "text" for prose tasks such as translation, summarization,
-or drafting. Use "json" only when the goal explicitly requires structured JSON.
+or drafting. When the goal explicitly requires structured JSON, choose
+"json_object" if a correct response is a single JSON object, or "json_array" if
+a correct response is a top-level JSON array (e.g. a list of extracted items).
+output_format must be exactly one of these three values — never the bare word
+"json". A goal that asks for a list, array, or "every X" of something is
+json_array, not json_object; reserve json_object for a single structured
+result with named fields.
 """
 
 user = """
@@ -62,3 +68,9 @@ expected_output = "Creates representative project-update input and semantic crit
 name = "uses the default optional context"
 variable.goal = "Translate a customer message into French"
 expected_output = "Returns a structured test fixture whose input is a plausible customer message, whose expected_output gives concise criteria for an accurate French translation, and whose output_format is text."
+
+[[tests]]
+name = "creates a json_array fixture for a list-shaped extraction task"
+variable.goal = "Extract every date mentioned in a message as a JSON array of strings"
+variable.user_expectation = "Return a JSON array; do not wrap it in an object."
+expected_output = "Creates representative input containing several date mentions and semantic criteria describing a correct list of extracted dates, with output_format set to json_array (not json_object)."

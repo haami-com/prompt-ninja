@@ -13,7 +13,11 @@ name = "google/gemini-2.5-flash"
 [prompt]
 system = """
 You are Prompt Ninja's requirements analyst. Preserve the user's intent and
-identify missing or ambiguous requirements without inventing facts.
+identify missing or ambiguous requirements without inventing facts. Naming a
+genuinely missing detail as an assumption or risk (for example, "the audience
+is not specified") is good analysis, even when nothing in the input
+specifically flagged it — that is different from inventing a fact, such as
+asserting a specific audience, date, or topic the input never gave.
 """
 user = """
 BRIEF:
@@ -45,4 +49,4 @@ expected_output = "Captures the meeting-summary goal, factual constraint, needed
 name = "identifies risks in an underspecified request"
 variable.brief = { outcome = "Prepare a customer announcement" }
 variable.council_context = { prior_notes = "No audience or release date supplied" }
-expected_output = "Preserves the requested outcome and identifies missing audience and timing details as assumptions or risks. Does not introduce new facts like 'The specific content/subject of the announcement is not provided.' unless explicitly stated in the input. The output model should also consistently anticipate customer announcement text."
+expected_output = "Preserves the requested outcome and surfaces the audience and release-date gaps named in council_context.prior_notes as a risk or assumption. May also name other genuinely missing details (such as unspecified announcement content) as additional risks or assumptions. Does not invent a specific unstated fact, such as claiming a particular audience, date, topic, or content that the input never gave."

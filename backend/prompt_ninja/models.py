@@ -1,6 +1,7 @@
-from typing import Literal
+import re
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .model_config import DEFAULT_MODEL
 
@@ -67,9 +68,33 @@ class GeneratedTestCaseResult(BaseModel):
     expected_output: str = Field(
         description="Natural-language criteria for a correct result, not an exact answer."
     )
-    output_format: Literal["text", "json"] = Field(
-        description="Whether the generated prompt should produce text or JSON."
+    output_format: Literal["text", "json_object", "json_array"] = Field(
+        description=(
+            "Whether the generated prompt should produce plain text, a top-level "
+            "JSON object, or a top-level JSON array."
+        )
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_output_format(cls, data: Any) -> Any:
+        """Repair the model's occasional bare "json" into a concrete category.
+
+        Despite an explicit prompt instruction against it, some models still
+        default to the generic legacy term instead of choosing json_object vs
+        json_array. Infer the right one from the fixture's own expected_output
+        text rather than fail the whole run over a single stale keyword.
+        """
+        if not isinstance(data, dict) or data.get("output_format") != "json":
+            return data
+        expected_output = data.get("expected_output", "")
+        is_list_shaped = isinstance(expected_output, str) and bool(
+            re.search(r"\b(array|list)\b", expected_output, re.IGNORECASE)
+        )
+        return {
+            **data,
+            "output_format": "json_array" if is_list_shaped else "json_object",
+        }
 
 
 class GreetingResult(BaseModel):

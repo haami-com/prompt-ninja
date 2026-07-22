@@ -16,6 +16,7 @@ import os
 import random
 import re
 import sys
+import textwrap
 import tomllib
 import uuid
 from datetime import date, datetime
@@ -84,6 +85,55 @@ def _toml_key(key: str) -> str:
         if _TOML_BARE_KEY_PATTERN.fullmatch(key)
         else json.dumps(key, ensure_ascii=False)
     )
+
+
+_TOML_LINE_WIDTH = 120
+
+
+def _wrap_long_lines(text: str, width: int = _TOML_LINE_WIDTH) -> str:
+    """Visually rewrap lines longer than `width` without changing the value.
+
+    A line broken here is rejoined with a TOML line-ending backslash: TOML
+    discards a `\\` at the end of a line along with the newline and any
+    leading whitespace that follows, so the extra breaks are purely a file
+    presentation choice and the parsed string is unchanged. Lines that were
+    already separated by a real newline in the source value stay separated by
+    a real newline here too.
+    """
+    rendered_lines = []
+    for line in text.split("\n"):
+        if len(line) <= width:
+            rendered_lines.append(line)
+            continue
+        # Reserve 2 columns for the trailing " \" continuation marker every
+        # wrapped chunk but the last one gets, so no rendered line exceeds width.
+        chunks = (
+            textwrap.wrap(
+                line, width=width - 2, break_long_words=False, break_on_hyphens=False
+            )
+            or [""]
+        )
+        rendered_lines.append(" \\\n".join(chunks))
+    return "\n".join(rendered_lines)
+
+
+def _toml_multiline_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"""', '""\\"')
+    return '"""\n%s"""' % _wrap_long_lines(escaped)
+
+
+def _toml_scalar(value: Any, *, prefix: str = "") -> str:
+    """Serialize a top-level `key = value` line, wrapping long strings for readability.
+
+    `prefix` is the literal text ("key = ") that will precede the returned value on
+    the same line, so the width check reflects the actual rendered line length.
+    """
+    if isinstance(value, str):
+        single_line = _toml_value(value)
+        if "\n" in value or len(prefix) + len(single_line) > _TOML_LINE_WIDTH:
+            return _toml_multiline_string(value)
+        return single_line
+    return _toml_value(value)
 
 
 def _toml_value(value: Any) -> str:
@@ -421,6 +471,10 @@ class JsonObjectOutput(RootModel[dict[str, Any]]):
     """Generic structured output for an object without a domain model."""
 
 
+class JsonArrayOutput(RootModel[list[Any]]):
+    """Generic structured output for a top-level JSON array without a domain model."""
+
+
 class PromptTestCase(SpecModel):
     name: str | None = Field(default=None, min_length=1)
     variable: dict[str, Any]
@@ -689,7 +743,7 @@ def _output_instruction(
         sort_keys=True,
     )
     return (
-        "Output contract (metadata.output = %r): return only a JSON object that "
+        "Output contract (metadata.output = %r): return only JSON that "
         "validates against this schema:\n%s" % (declaration, schema)
     )
 
@@ -1027,6 +1081,7 @@ class OpenRouterPromptClient:
             provider_can_parse_model = (
                 effective_output_model is not None
                 and effective_output_model is not JsonObjectOutput
+                and effective_output_model is not JsonArrayOutput
             )
             if provider_can_parse_model and callable(parse_response):
                 response = await parse_response(
@@ -1110,13 +1165,14 @@ class PromptNinja:
         """Serialize this validated prompt definition using readable TOML tables."""
         definition = self.spec.model_dump(by_alias=True, exclude_none=True)
 
+        def assignment(key: str, value: Any, key_prefix: str = "") -> str:
+            toml_key = key_prefix + _toml_key(key)
+            return "%s = %s" % (toml_key, _toml_scalar(value, prefix=toml_key + " = "))
+
         def table(name: str, values: Mapping[str, Any]) -> list[str]:
             return [
                 f"[{name}]",
-                *[
-                    "%s = %s" % (_toml_key(key), _toml_value(value))
-                    for key, value in values.items()
-                ],
+                *[assignment(key, value) for key, value in values.items()],
             ]
 
         lines = [
@@ -1129,20 +1185,19 @@ class PromptNinja:
         for variable in definition["variables"]:
             lines.extend(["", "[[variables]]"])
             lines.extend(
-                "%s = %s" % (_toml_key(key), _toml_value(value))
-                for key, value in variable.items()
+                assignment(key, value) for key, value in variable.items()
             )
         if testing := definition.get("testing"):
             lines.extend(["", *table("testing", testing)])
         for test in definition["tests"]:
             lines.extend(["", "[[tests]]"])
             lines.extend(
-                "%s = %s" % (_toml_key(key), _toml_value(value))
+                assignment(key, value)
                 for key, value in test.items()
                 if key != "variable"
             )
             lines.extend(
-                "variable.%s = %s" % (_toml_key(key), _toml_value(value))
+                assignment(key, value, key_prefix="variable.")
                 for key, value in test["variable"].items()
             )
         return "\n".join(lines) + "\n"

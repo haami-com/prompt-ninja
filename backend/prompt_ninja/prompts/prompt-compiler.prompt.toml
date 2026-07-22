@@ -19,6 +19,12 @@ template placeholder used in either template, with the correct Prompt Ninja type
 required flag, and any safe default. Preserve the proposal's intent while using
 the test evidence to make the prompt executable. Use provider "openrouter" and the
 requested model.
+Put the candidate prompt's operating instructions in the system template, verbatim
+or only lightly normalized. Put a placeholder for the primary runtime input in the
+user template, named for what it holds (for example a placeholder named "update"
+or "message"); never leave the user template as static text with no placeholder,
+and never invent a variable whose name is unrelated to the candidate prompt or
+requirements.
 Variable names must be lower_snake_case, and every declared name must appear in
 the template as a placeholder with that exact same casing — never declare a
 variable in one case and reference it in the template with different casing.
@@ -28,17 +34,22 @@ metadata.used_by must contain repository-relative consumer file paths with a fil
 extension, never package or application names. Use [] when no concrete consumer
 path is known; never invent a consumer.
 For metadata.output, use "String" unless the request explicitly requires
-structured JSON, in which case use "prompt_ninja.JsonObjectOutput". Use
+structured JSON. For JSON, inspect SELF-TEST EVIDENCE actual_output: if it is a
+top-level JSON object, use "prompt_ninja.JsonObjectOutput"; if it is a
+top-level JSON array, use "prompt_ninja.JsonArrayOutput". Never pick
+JsonObjectOutput for a candidate whose system prompt or tested response
+produces a bare array — a bare array cannot be validated as an object. Use
 "BigInt" only for one integer. Do not invent a dotted Pydantic model path; use
 another dotted path only when it appears verbatim in the supplied requirements
 or candidate prompt.
-For structured JSON, also return output_model with a PascalCase class_name and
-one field for every required output property. Use only the supported scalar and
-list field types. For String or BigInt, return output_model as null. The CLI will
-write this model into the user's project and replace the temporary generic output
-path with its real import path. The structured output_model must validate the
-actual_output in SELF-TEST EVIDENCE; do not declare fields that contradict the
-tested response.
+For a top-level JSON object, also return output_model with a PascalCase
+class_name and one field for every required output property. Use only the
+supported scalar and list field types. For String, BigInt, or a top-level JSON
+array, return output_model as null. The CLI will write an object output_model
+into the user's project and replace the temporary generic output path with its
+real import path; JsonArrayOutput has no companion model and stays as-is. The
+structured output_model, when present, must validate the actual_output in
+SELF-TEST EVIDENCE; do not declare fields that contradict the tested response.
 Variable type MUST be one of string/str, integer/int, number/float,
 boolean/bool, json, dict, date, datetime, dynamic, list[TYPE], or a real dotted
 Pydantic BaseModel path.
@@ -104,13 +115,13 @@ variable.model = "google/gemini-2.5-flash"
 variable.requirements = { output_contract = "Three concise bullets", constraints = "Do not invent facts" }
 variable.candidate_prompt = "Summarize the supplied update into three factual bullets."
 variable.test_result = { passed = true, score = 0.98 }
-expected_output = "Produces a complete Prompt Ninja 1.2 definition with declared variables and a meaningful embedded semantic test."
+expected_output = "Produces a complete Prompt Ninja 1.2 definition with metadata.output String, the candidate's summarization instructions in the system template, and one declared variable referenced by a matching placeholder in the user template."
 
 [[tests]]
-name = "preserves typed input requirements"
-variable.goal = "Draft a reply using a customer record"
+name = "compiles a typed placeholder into a bare JSON array output"
+variable.goal = "Extract every date mentioned in a customer message as a JSON array of ISO date strings"
 variable.model = "google/gemini-2.5-flash"
-variable.requirements = { output_contract = "A professional reply", inputs = "customer record" }
-variable.candidate_prompt = "Use {{customer}} to draft a professional reply."
-variable.test_result = { passed = true, score = 0.96 }
-expected_output = "Produces a valid definition that declares the customer placeholder and uses a testable semantic expectation."
+variable.requirements = { output_contract = "A JSON array of ISO date strings, nothing else", inputs = "customer message" }
+variable.candidate_prompt = "Extract every date mentioned in {{customer_message}} as a JSON array of ISO 8601 date strings. Return only the array, never wrapped in an object."
+variable.test_result = { passed = true, score = 0.97, actual_output = '["2026-05-10", "2026-06-03"]' }
+expected_output = "Produces a valid definition that declares the customer_message placeholder, sets metadata.output to prompt_ninja.JsonArrayOutput, and leaves output_model null because the tested response is a bare JSON array."

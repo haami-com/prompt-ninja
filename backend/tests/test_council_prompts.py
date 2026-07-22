@@ -151,7 +151,7 @@ def test_council_compiles_a_validated_definition_after_self_test_evidence():
                 return {
                     "input": "A project update.",
                     "expected_output": "A matching category and escalation decision.",
-                    "output_format": "json",
+                    "output_format": "json_object",
                 }
             if prepared.name == "generated_prompt_under_test":
                 return {"category": "status", "needs_escalation": False}

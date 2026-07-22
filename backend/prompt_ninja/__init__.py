@@ -11,6 +11,7 @@ from .hooks import (
 )
 from .core import (
     BigIntOutput,
+    JsonArrayOutput,
     JsonObjectOutput,
     OpenRouterPromptClient,
     PreparedPrompt,
@@ -36,6 +37,7 @@ __version__ = version("prompt-ninja")
 __all__ = [
     "BigIntOutput",
     "EveryNRunEvalHook",
+    "JsonArrayOutput",
     "JsonObjectOutput",
     "OpenRouterPromptClient",
     "OpenRouterRunJudge",

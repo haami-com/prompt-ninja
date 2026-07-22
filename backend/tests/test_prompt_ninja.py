@@ -282,12 +282,12 @@ def test_included_prompt_file_has_a_passing_test():
     assert report.results[0].score == 0.96
 
 
-def test_every_checked_in_prompt_has_two_semantic_test_cases():
+def test_every_checked_in_prompt_has_at_least_two_semantic_test_cases():
     prompts_directory = PROMPTS_DIRECTORY
 
     for path in sorted(prompts_directory.glob("*.prompt.toml")):
         prompt = PromptNinja.from_file(path)
-        assert len(prompt.tests) == 2, path.name
+        assert len(prompt.tests) >= 2, path.name
         assert all(test.expected_output.strip() for test in prompt.tests), path.name
 
 
